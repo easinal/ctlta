@@ -1,0 +1,27 @@
+[
+  {
+    "directory": "/workspace",
+    "command": "clang++ -I/workspace -I/workspace/Algorithms -I/workspace/DataStructures -I/workspace/Tools -std=c++20 -c /workspace/Algorithms/CTNR/CTNR.h",
+    "file": "/workspace/Algorithms/CTNR/CTNR.h"
+  },
+  {
+    "directory": "/workspace",
+    "command": "clang++ -I/workspace -I/workspace/Algorithms -I/workspace/DataStructures -I/workspace/Tools -std=c++20 -c /workspace/Algorithms/CTNR/LocalityFilter.h",
+    "file": "/workspace/Algorithms/CTNR/LocalityFilter.h"
+  },
+  {
+    "directory": "/workspace",
+    "command": "clang++ -I/workspace -I/workspace/Algorithms -I/workspace/DataStructures -I/workspace/Tools -std=c++20 -c /workspace/Algorithms/CTNR/TransitNodeSelector.h",
+    "file": "/workspace/Algorithms/CTNR/TransitNodeSelector.h"
+  },
+  {
+    "directory": "/workspace",
+    "command": "clang++ -I/workspace -I/workspace/Algorithms -I/workspace/DataStructures -I/workspace/Tools -std=c++20 -c /workspace/Algorithms/CTNR/AccessNodeComputer.h",
+    "file": "/workspace/Algorithms/CTNR/AccessNodeComputer.h"
+  },
+  {
+    "directory": "/workspace",
+    "command": "clang++ -I/workspace -I/workspace/Algorithms -I/workspace/DataStructures -I/workspace/Tools -std=c++20 -c /workspace/Algorithms/CTNR/DistanceTable.h",
+    "file": "/workspace/Algorithms/CTNR/DistanceTable.h"
+  }
+]
