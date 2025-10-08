@@ -17,6 +17,7 @@
 #include "Algorithms/CCH/CCH.h"
 #include "Algorithms/CCH/CCHMetric.h"
 #include "Algorithms/CCH/EliminationTreeQuery.h"
+#include "Algorithms/CTNR/CTNR.h"
 #include "Algorithms/CH/CH.h"
 #include "Algorithms/CH/CHQuery.h"
 #include "Algorithms/Dijkstra/BiDijkstra.h"
@@ -40,7 +41,8 @@ inline void printUsage() {
               "Usage: RunP2PAlgo -a CH         -o <file> -g <file>\n"
 
               "       RunP2PAlgo -a CCH        -o <file> -g <file> [-b <balance>]\n"
-              "       RunP2PAlgo -a CTL        -o <file> -g <file> [-b <balance>]\n\n"
+              "       RunP2PAlgo -a CTL        -o <file> -g <file> [-b <balance>]\n"
+              "       RunP2PAlgo -a CTNR       -o <file> -g <file> [-b <balance>]\n\n"
 
               "       RunP2PAlgo -a CCH-custom -o <file> -g <file> -s <file> [-n <num>]\n"
               "       RunP2PAlgo -a CTL-custom -o <file> -g <file> -s <file> [-n <num>]\n\n"
@@ -50,10 +52,11 @@ inline void printUsage() {
               "       RunP2PAlgo -a CH         -o <file> -h <file> -d <file>\n"
               "       RunP2PAlgo -a CCH-Dij    -o <file> -g <file> -d <file> -s <file>\n"
               "       RunP2PAlgo -a CCH-tree   -o <file> -g <file> -d <file> -s <file>\n"
-              "       RunP2PAlgo -a CTL        -o <file> -g <file> -d <file> -s <file>\n\n"
+              "       RunP2PAlgo -a CTL        -o <file> -g <file> -d <file> -s <file>\n"
+              "       RunP2PAlgo -a CTNR       -o <file> -g <file> -d <file> -s <file>\n\n"
 
               "Runs the preprocessing, customization or query phase of various point-to-point\n"
-              "shortest-path algorithms, such as Dijkstra, bidirectional search, CH, CCH, and CTL.\n\n"
+              "shortest-path algorithms, such as Dijkstra, bidirectional search, CH, CCH, CTL, and CTNR.\n\n"
 
               "  -l                use physical lengths as metric (default: travel times)\n"
               "  -no-stall         do not use the stall-on-demand technique\n"
@@ -85,6 +88,11 @@ using CCHTree = EliminationTreeQuery<LabelSet>;
 template<typename AlgoT>
 inline void writeHeaderLine(std::ofstream &out, AlgoT &) {
     out << "distance,query_time" << '\n';
+}
+
+template<>
+inline void writeHeaderLine(std::ofstream &out, CTNRQuery<InputGraph> &) {
+    out << "distance,query_time,mode" << '\n';
 }
 
 // Writes a record line of the output CSV file, containing statistics about a single query.
@@ -121,6 +129,10 @@ inline void runQueries(AlgoT &algo, const std::string &demand, std::ofstream &ou
         const auto elapsed = timer.elapsed<std::chrono::nanoseconds>();
         if (hasRanks) out << rank << ',';
         writeRecordLine(out, algo, dst, elapsed);
+        if constexpr (std::is_same_v<AlgoT, CTNRQuery<InputGraph>>) {
+            out.seekp(-1, std::ios_base::cur); // overwrite newline
+            out << ',' << algo.getLastMode() << '\n';
+        }
     }
 }
 
@@ -291,18 +303,18 @@ inline void runQueries(const CommandLineParser &clp) {
         using CTLLabelSet = std::conditional_t<CTL_SIMD_LOGK == 0,
                 BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>,
                 SimdLabelSet<CTL_SIMD_LOGK, ParentInfo::NO_PARENT_INFO>>;
-        using LabellingT = TruncatedTreeLabelling<CTLLabelSet>;
+        using LabellingT = TruncatedTreeLabelling<CTLLabelSet::K, CTLLabelSet::KEEP_PARENT_EDGES>;
         LabellingT ctl(treeHierarchy);
         ctl.init();
 
-        CTLMetric<LabellingT> metric(treeHierarchy, cch, useLengths ? &graph.length(0) : &graph.travelTime(0));
+        CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch, useLengths ? &graph.length(0) : &graph.travelTime(0));
         metric.buildCustomizedCTL(ctl);
 
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# Separator: " << sepFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
 
-        CTLQuery<CTLMetric<LabellingT>::SearchGraph, LabellingT> algo(treeHierarchy, metric.upwardGraph(),
+        CTLQuery<CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION>::SearchGraph, LabellingT, CTLLabelSet> algo(treeHierarchy, metric.upwardGraph(),
                                                                       metric.downwardGraph(), metric.upwardWeights(),
                                                                       metric.downwardWeights(), ctl);
 
@@ -315,6 +327,44 @@ inline void runQueries(const CommandLineParser &clp) {
                    (cch.sizeInBytes() + treeHierarchy.sizeInBytes() + ctl.sizeInBytes() + metric.sizeInBytes() +
                     algo.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
         runQueries(algo, demandFileName, outputFile, [&](const int v) { return cch.getRanks()[v]; });
+
+    } else if (algorithmName == "CTNR") {
+
+        // Run customizable transit node routing (CTNR) queries
+        std::ifstream graphFile(graphFileName, std::ios::binary);
+        if (!graphFile.good())
+            throw std::invalid_argument("file not found -- '" + graphFileName + "'");
+        InputGraph graph(graphFile);
+        graphFile.close();
+
+        std::ifstream sepFile(sepFileName, std::ios::binary);
+        if (!sepFile.good())
+            throw std::invalid_argument("file not found -- '" + sepFileName + "'");
+        SeparatorDecomposition sepDecomp;
+        sepDecomp.readFrom(sepFile);
+        sepFile.close();
+
+        // Build CTNR
+        CTNR<InputGraph> ctnr(sepDecomp, 5); // Use top k levels as transit nodes
+        ctnr.preprocess(graph);
+
+        // Customize CTNR
+        std::vector<int32_t> edgeWeights(graph.numEdges());
+        FORALL_EDGES(graph, e) {
+            edgeWeights[e] = useLengths ? graph.length(e) : graph.travelTime(e);
+        }
+        
+        ctnr.customize(edgeWeights.data());
+        
+        outputFile << "# Graph: " << graphFileName << '\n';
+        outputFile << "# OD pairs: " << demandFileName << '\n';
+        // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
+
+        // Use generic runQueries with CTNRQuery; pass CCH rank IDs to the algo
+        const auto &metric = ctnr.getMetric();
+        CTNRQuery<InputGraph> algo(metric);
+        runQueries(algo, demandFileName, outputFile, [&](const int v) { return ctnr.getCCH().getRanks()[v]; });
+
     } else {
 
         throw std::invalid_argument("invalid P2P algorithm -- '" + algorithmName + "'");
@@ -519,6 +569,49 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         if (!outputFile.good())
             throw std::invalid_argument("file cannot be opened -- '" + outputFileName);
         sepDecomp.writeTo(outputFile);
+
+    } else if (algorithmName == "CTNR") {
+        std::cout << "CTNR preprocessing (using existing separator decomposition) for " << graphFileName
+                  << "... " << std::flush;
+        Timer timer;
+        std::string sepFileName = graphFileName;
+        size_t lastDot = sepFileName.find_last_of('.');
+        if (lastDot != std::string::npos) {
+            sepFileName = sepFileName.substr(0, lastDot);
+        }
+        sepFileName += ".strict_bisep.bin";
+        
+        // 读取现有的分隔分解文件
+        std::ifstream sepFile(sepFileName, std::ios::binary);
+        if (!sepFile.good()) {
+            std::cout << "Separator decomposition file not found: " << sepFileName << std::endl;
+            std::cout << "Please run CTL preprocessing first to generate separator decomposition." << std::endl;
+            return;
+        }
+        
+        SeparatorDecomposition sepDecomp;
+        sepDecomp.readFrom(sepFile);
+        sepFile.close();
+        
+        std::cout << "Loaded separator decomposition with " << sepDecomp.tree.size() << " nodes" << std::endl;
+
+        // Build CTNR
+        CTNR<InputGraph> ctnr(sepDecomp, 5); // Use top 5 levels as transit nodes
+        ctnr.preprocess(graph);
+        
+        std::cout << "CTNR preprocessing completed with " << ctnr.getTransitNodes().size() 
+                  << " transit nodes" << std::endl;
+
+        if (!endsWith(outputFileName, ".ctnr.bin"))
+            outputFileName += ".ctnr.bin";
+        std::ofstream outputFile(outputFileName, std::ios::binary);
+        if (!outputFile.good())
+            throw std::invalid_argument("file cannot be opened -- '" + outputFileName);
+        // CTNR currently has no serialization; keep placeholder to match other modes
+        
+        const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
+        std::cout << " finished (" << preprocessTime << " microseconds)." << std::endl;
+
     } else if (algorithmName == "CTL-custom") {
 
         // Run the customization phase of CCH.
@@ -545,7 +638,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         using CTLLabelSet = std::conditional_t<CTL_SIMD_LOGK == 0,
                 BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>,
                 SimdLabelSet<CTL_SIMD_LOGK, ParentInfo::NO_PARENT_INFO>>;
-        using LabellingT = TruncatedTreeLabelling<CTLLabelSet>;
+        using LabellingT = TruncatedTreeLabelling<CTLLabelSet::K, CTLLabelSet::KEEP_PARENT_EDGES>;
         LabellingT ctl(treeHierarchy);
         ctl.init();
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
@@ -566,7 +659,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
                 cchCustom = timer.elapsed<std::chrono::microseconds>();
             }
             {
-                CTLMetric<LabellingT, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch, &graph.travelTime(0));
+                CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch, &graph.travelTime(0));
                 timer.restart();
                 metric.buildCustomizedCTL(ctl);
                 tot = timer.elapsed<std::chrono::microseconds>();

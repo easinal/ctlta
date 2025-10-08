@@ -91,13 +91,12 @@ public:
                truncateVertex.numBlocks() * sizeof(BitVector::Block) ;
     }
 
-private:
-
     inline uint32_t getVertexDepth(const int32_t& v) const {
         KASSERT(v >= 0 && v < firstSepSizeSum.size() - 1);
         return firstSepSizeSum[v + 1] - firstSepSizeSum[v] - 1;
     }
 
+private:
     // Returns true if every separator node in decomposition has at most two children, or false otherwise.
     static bool hasStrictDissectionStructure(const SeparatorDecomposition &sd) {
         for (const auto &n: sd.tree)

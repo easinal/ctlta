@@ -50,6 +50,10 @@ class CCHMetric {
       return buildMinimumWeightedCH<NoOpTimer>(time, time, time);
   }
 
+  // Accessors for edge weights
+  const int32_t* upwardWeights() const { return upWeights.data(); }
+  const int32_t* downwardWeights() const { return downWeights.data(); }
+
   // Returns a weighted CH having the smallest possible number of edges for the given order.
   template<typename TimerT>
   CH buildMinimumWeightedCH(int64_t& basicCustomizationTime,

@@ -399,10 +399,8 @@ private:
     inline void computeMinDistanceInLabels(const UpLabel &up, const DownLabel &down, const uint32_t lowestCommonHub) {
 
         // Compute minimum distance by combining labels
-        int32_t const * const startUp = up.startDists();
-        int32_t const * const startDown = down.startDists();
         for (int i = 0; i < lowestCommonHub; ++i) {
-            const auto newDist = *(startUp + i) + *(startDown + i);
+            const auto newDist = up.dist(i) + down.dist(i);
             if (newDist < lastDistance) {
                 lastDistance = newDist;
                 lastMeetingHubIdx = i;
