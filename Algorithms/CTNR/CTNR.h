@@ -38,6 +38,7 @@ public:
     const BalancedTopologyCentricTreeHierarchy& getHierarchy() const { return metric.getHierarchy(); }
     const CCH& getCCH() const { return metric.getCCH(); }
     const std::vector<int32_t>& getTransitNodes() const { return metric.getTransitNodes(); }
+    const std::vector<int>& getNodeLevel() const { return metric.getNodeLevel(); }
     
     // Memory usage - complete implementation including all components
     uint64_t sizeInBytes() const {
