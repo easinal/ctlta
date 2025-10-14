@@ -167,6 +167,7 @@ void CTNRMetric<InputGraphT>::selectTransitNodes() {
         transitNodeToDistanceTableIndex[transitNodes[i]] = i;
     }
     std::cout << "CTNR: Selected " << transitNodes.size()<< " transit nodes from top " << transitNodeThreshold << " levels" << std::endl;
+    std::cout << "Total number of vertices: " <<   forwardAccessNodes.size() << std::endl;
 }
 
 template<typename InputGraphT>
@@ -271,6 +272,9 @@ void CTNRMetric<InputGraphT>::computeDistanceTable() {
 template<typename InputGraphT>
 void CTNRMetric<InputGraphT>::pruneAccessNodesByDominance() {
     auto pruneOne = [&](std::vector<int32_t>& nodes, std::vector<int32_t>& dists, bool isForward) {
+        for(int i = 0; i < nodes.size(); ++i) {
+            nodes[i] = transitNodeToDistanceTableIndex[nodes[i]];
+        }
         if (nodes.size() <= 1) return;
         std::vector<bool> keep(nodes.size(), true);
         for (size_t i = 0; i < nodes.size(); ++i) {
@@ -307,10 +311,11 @@ void CTNRMetric<InputGraphT>::pruneAccessNodesByDominance() {
 
 template<typename InputGraphT>
 int32_t CTNRMetric<InputGraphT>::getTransitNodeDistance(int32_t accessS, int32_t accessT) const {
-    auto itS = transitNodeToDistanceTableIndex.find(accessS);
-    auto itT = transitNodeToDistanceTableIndex.find(accessT);
-    if (itS == transitNodeToDistanceTableIndex.end() || itT == transitNodeToDistanceTableIndex.end()) {
-        return INFTY;
-    }
-    return distanceTable[itS->second][itT->second];
+    return distanceTable[accessS][accessT];
+    // auto itS = transitNodeToDistanceTableIndex.find(accessS);
+    // auto itT = transitNodeToDistanceTableIndex.find(accessT);
+    // if (itS == transitNodeToDistanceTableIndex.end() || itT == transitNodeToDistanceTableIndex.end()) {
+    //     return INFTY;
+    // }
+    // return distanceTable[itS->second][itT->second];
 }

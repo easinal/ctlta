@@ -34,11 +34,11 @@ public:
         int lcaDepth = metric.separatorNodeToLevel[lca];
         if( lcaDepth > metric.getTransitNodeThreshold()) {
             lastModeIsLocal = true;
-            std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is not a transit node"<<std::endl;
+            // std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is not a transit node"<<std::endl;
             return localQuery(s, t);
         }else{
             lastModeIsLocal = false;
-            std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is a transit node"<<std::endl;
+            // std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is a transit node"<<std::endl;
             return transitNodeQuery(s, t, lcaDepth);
         }
     }
@@ -77,7 +77,7 @@ private:
         size_t candS = aS.size();
         size_t candT = aT.size();
         size_t evaluated = 0;
-        std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
+        // std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
 
         // const auto byLevel = [&](int level, int v){
         //     auto it = metric.transitVertexToLevel.find(v);
@@ -91,18 +91,12 @@ private:
 
         for (int i = 0; i<sBound; ++i) {
             if (dS[i] >= minDist) continue;
-            auto itS = transitNodeToDistanceTableIndex->find(aS[i]);
-            if (itS == transitNodeToDistanceTableIndex->end()) continue;
-            const int idxS = itS->second;
 
 
             for (int j = 0; j<tBound; ++j) {
                 if (dT[j] >= minDist) continue;            
-                auto itT = transitNodeToDistanceTableIndex->find(aT[j]);
-                if (itT == transitNodeToDistanceTableIndex->end()) continue;
-                const int idxT = itT->second;
 
-                const int32_t mid = (*distanceTable)[idxS][idxT];
+                const int32_t mid = (*distanceTable)[aS[i]][aT[j]];
                 if (mid >= minDist) { 
                     continue;
                 }
@@ -111,6 +105,7 @@ private:
                 if (total < minDist) minDist = total;
             }
         }
+        std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
         std::cout << "candS: " << candS << ", candT: " << candT << ", validS: " << sBound << ", validT: " << tBound << ", evaluated: " << evaluated << std::endl;
         lastDistance = minDist;
         return minDist;
