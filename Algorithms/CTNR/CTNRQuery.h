@@ -30,15 +30,16 @@ public:
 
     // Main query method (s, t are rank IDs)
     int32_t run(int32_t s, int32_t t) {
-        const uint32_t lcaDepth = metric.getHierarchy().getLowestCommonHub(s, t);
+        const uint32_t lca = metric.getHierarchy().getLowestCommonHub(s, t);
+        int lcaDepth = metric.separatorNodeToLevel[lca];
         if( lcaDepth > metric.getTransitNodeThreshold()) {
             lastModeIsLocal = true;
-            // std::cout<<"lca: "<<lca<<", is not a transit node"<<std::endl;
+            std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is not a transit node"<<std::endl;
             return localQuery(s, t);
         }else{
             lastModeIsLocal = false;
-            // std::cout<<"lca: "<<lca<<", nodeLevel: "<<metric.transitNodesIDToLevel.find(lca)->second<<std::endl;
-            return transitNodeQuery(s, t, metric.transitNodesIDToLevel.find(lcaDepth)->second);
+            std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is a transit node"<<std::endl;
+            return transitNodeQuery(s, t, lcaDepth);
         }
     }
     int32_t getDistance() const { return lastDistance; }
@@ -76,25 +77,26 @@ private:
         size_t candS = aS.size();
         size_t candT = aT.size();
         size_t evaluated = 0;
-        // std::cout<<"s: "<<s<<" depth: "<<metric.getHierarchy().getVertexDepth(s)<<", t: "<<t<<" depth: "<<metric.getHierarchy().getVertexDepth(t)<<std::endl;
-        // std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
-        const auto byLevel = [&](int level, int v){
-            auto it = metric.transitVertexToLevel.find(v);
-            const int vLevel = (it == metric.transitVertexToLevel.end()) ? INT_MAX : it->second;
-            return level < vLevel;
-        };
-        const size_t sBound = std::upper_bound(aS.begin(), aS.end(), lcaNodeLevel, byLevel) - aS.begin();
-        const size_t tBound = std::upper_bound(aT.begin(), aT.end(), lcaNodeLevel, byLevel) - aT.begin();
+        std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
 
-        for (int i = sBound-1; i>=0; --i) {
+        // const auto byLevel = [&](int level, int v){
+        //     auto it = metric.transitVertexToLevel.find(v);
+        //     const int vLevel = (it == metric.transitVertexToLevel.end()) ? INT_MAX : it->second;
+        //     return level < vLevel;
+        // };
+        // const size_t sBound = std::upper_bound(aS.begin(), aS.end(), lcaNodeLevel, byLevel) - aS.begin();
+        // const size_t tBound = std::upper_bound(aT.begin(), aT.end(), lcaNodeLevel, byLevel) - aT.begin();
+        const size_t sBound = aS.size();
+        const size_t tBound = aT.size();
+
+        for (int i = 0; i<sBound; ++i) {
             if (dS[i] >= minDist) continue;
-            if(metric.getHierarchy().getVertexDepth(aS[i]) > lcaNodeLevel) break;
             auto itS = transitNodeToDistanceTableIndex->find(aS[i]);
             if (itS == transitNodeToDistanceTableIndex->end()) continue;
             const int idxS = itS->second;
 
 
-            for (int j = tBound-1; j>=0; --j) {
+            for (int j = 0; j<tBound; ++j) {
                 if (dT[j] >= minDist) continue;            
                 auto itT = transitNodeToDistanceTableIndex->find(aT[j]);
                 if (itT == transitNodeToDistanceTableIndex->end()) continue;
@@ -110,7 +112,6 @@ private:
             }
         }
         std::cout << "candS: " << candS << ", candT: " << candT << ", validS: " << sBound << ", validT: " << tBound << ", evaluated: " << evaluated << std::endl;
-
         lastDistance = minDist;
         return minDist;
     }

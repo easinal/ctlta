@@ -8,6 +8,7 @@
 #include "Tools/Constants.h"
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <memory>
 
@@ -87,7 +88,7 @@ public:
         
         return size;
     }
-    std::unordered_map<int32_t, int32_t> transitNodesIDToLevel;  // separator node ID -> level
+    std::vector<int32_t> separatorNodeToLevel;  // separator node ID -> level
     std::unordered_map<int32_t, int32_t> transitVertexToLevel;  // vertex ID -> level
 
 private:
@@ -134,10 +135,11 @@ private:
 
 template<typename InputGraphT>
 void CTNRMetric<InputGraphT>::selectTransitNodes() {
+    separatorNodeToLevel.resize(sepDecomp.tree.size(), -1);
     std::function<void(int, int)> collectTransitNodes = 
         [&](int node, int level) {
             if (level <= transitNodeThreshold) {
-                transitNodesIDToLevel[node] = level;
+                separatorNodeToLevel[node] = level;
                 for (int v = sepDecomp.firstSeparatorVertex(node);
                      v < sepDecomp.lastSeparatorVertex(node); ++v) {
                         transitNodes.push_back(v);
@@ -145,11 +147,7 @@ void CTNRMetric<InputGraphT>::selectTransitNodes() {
                 }
             } else {
                 // return;
-                transitNodesIDToLevel[node] = level;
-                for (int v = sepDecomp.firstSeparatorVertex(node);
-                     v < sepDecomp.lastSeparatorVertex(node); ++v) {
-                        transitVertexToLevel[v] = level;  
-                }
+                separatorNodeToLevel[node] = level;
             }
             
             int child = sepDecomp.leftChild(node);
@@ -165,9 +163,10 @@ void CTNRMetric<InputGraphT>::selectTransitNodes() {
     };
     std::sort(transitNodes.begin(), transitNodes.end(),compareByLevel);
     for(int i = 0; i < transitNodes.size(); ++i) {
+        // std::cout<<"transitNodes["<<i<<"]: "<<transitNodes[i]<<std::endl;
         transitNodeToDistanceTableIndex[transitNodes[i]] = i;
     }
-    std::cout << "CTNR: Selected " << transitNodes.size() << " transit nodes from top " << transitNodeThreshold << " levels" << std::endl;
+    std::cout << "CTNR: Selected " << transitNodes.size()<< " transit nodes from top " << transitNodeThreshold << " levels" << std::endl;
 }
 
 template<typename InputGraphT>
@@ -177,61 +176,81 @@ void CTNRMetric<InputGraphT>::computeAccessNodes() {
         return transitVertexToLevel[a] < transitVertexToLevel[b];
     };
     cch.forEachVertexTopDown([&](int32_t rv) {
-        std::unordered_map<int, int> fMin;
-        std::unordered_map<int, int> bMin;
-
         if(transitVertexToLevel.find(rv) != transitVertexToLevel.end()) {
-            fMin[rv] = 0;
-            bMin[rv] = 0;
-        }
+            forwardAccessNodes[rv].push_back(rv);
+            forwardAccessDistances[rv].push_back(0);
+            backwardAccessNodes[rv].push_back(rv);
+            backwardAccessDistances[rv].push_back(0);
+        }else{
+            std::unordered_map<int, int> fMin;
+            std::unordered_map<int, int> bMin;
 
-        FORALL_INCIDENT_EDGES(cch.getUpwardGraph(), rv, e) {
-            const int neighbor = cch.getUpwardGraph().edgeHead(e);
-            const int wUp = cchMetric->upwardWeights()[e];
-            const int wDown = cchMetric->downwardWeights()[e];
+            FORALL_INCIDENT_EDGES(cch.getUpwardGraph(), rv, e) {
+                const int neighbor = cch.getUpwardGraph().edgeHead(e);
+                const int wUp = cchMetric->upwardWeights()[e];
+                const int wDown = cchMetric->downwardWeights()[e];
 
-            const auto& fa = forwardAccessNodes[neighbor];
-            const auto& fd = forwardAccessDistances[neighbor];
-            for (size_t i = 0; i < fa.size(); ++i) {
-                const int rTN = fa[i];
-                const int dist = fd[i] + wUp;
-                auto it = fMin.find(rTN);
-                if (it == fMin.end() || dist < it->second) fMin[rTN] = dist;
+                if(wUp != INFTY) {
+                    const auto& fa = forwardAccessNodes[neighbor];
+                    const auto& fd = forwardAccessDistances[neighbor];
+                    for (size_t i = 0; i < fa.size(); ++i) {
+                        const int rTN = fa[i];
+                            const int dist = fd[i] + wUp;
+                            auto it = fMin.find(rTN);
+                            if (it == fMin.end() || dist < it->second) fMin[rTN] = dist;
+                    }
+                }
+
+                if(wDown != INFTY) {
+                    const auto& ba = backwardAccessNodes[neighbor];
+                    const auto& bd = backwardAccessDistances[neighbor];
+                    for (size_t i = 0; i < ba.size(); ++i) {
+                        const int rTN = ba[i];
+                            const int dist = bd[i] + wDown;
+                            auto it = bMin.find(rTN);
+                            if (it == bMin.end() || dist < it->second) bMin[rTN] = dist;   
+                    }
+                }
             }
+            
+            forwardAccessNodes[rv].clear();
+            forwardAccessDistances[rv].clear();
+            backwardAccessNodes[rv].clear();
+            backwardAccessDistances[rv].clear();
 
-            const auto& ba = backwardAccessNodes[neighbor];
-            const auto& bd = backwardAccessDistances[neighbor];
-            for (size_t i = 0; i < ba.size(); ++i) {
-                const int rTN = ba[i];
-                const int dist = bd[i] + wDown;
-                auto it = bMin.find(rTN);
-                if (it == bMin.end() || dist < it->second) bMin[rTN] = dist;
+            forwardAccessNodes[rv].reserve(fMin.size());
+            forwardAccessDistances[rv].reserve(fMin.size());
+            backwardAccessNodes[rv].reserve(bMin.size());
+            backwardAccessDistances[rv].reserve(bMin.size());
+            for (const auto& kv : fMin) { forwardAccessNodes[rv].push_back(kv.first); }
+            for (const auto& kv : bMin) { backwardAccessNodes[rv].push_back(kv.first); }
+            sort(forwardAccessNodes[rv].begin(), forwardAccessNodes[rv].end(), compareByLevel);
+            sort(backwardAccessNodes[rv].begin(), backwardAccessNodes[rv].end(), compareByLevel);
+
+            for (auto &node: forwardAccessNodes[rv]) {
+                forwardAccessDistances[rv].push_back(fMin[node]);
             }
-        }
-        forwardAccessNodes[rv].clear();
-        forwardAccessDistances[rv].clear();
-        backwardAccessNodes[rv].clear();
-        backwardAccessDistances[rv].clear();
-
-        forwardAccessNodes[rv].reserve(fMin.size());
-        forwardAccessDistances[rv].reserve(fMin.size());
-        for (const auto& kv : fMin) { forwardAccessNodes[rv].push_back(kv.first); }
-
-        backwardAccessNodes[rv].reserve(bMin.size());
-        backwardAccessDistances[rv].reserve(bMin.size());
-        for (const auto& kv : bMin) { backwardAccessNodes[rv].push_back(kv.first); }
-        sort(forwardAccessNodes[rv].begin(), forwardAccessNodes[rv].end(), compareByLevel);
-        sort(backwardAccessNodes[rv].begin(), backwardAccessNodes[rv].end(), compareByLevel);
-
-        for (auto &node: forwardAccessNodes[rv]) {
-            forwardAccessDistances[rv].push_back(fMin[node]);
-        }
-        for (auto &node: backwardAccessNodes[rv]) {
-            backwardAccessDistances[rv].push_back(bMin[node]);
+            for (auto &node: backwardAccessNodes[rv]) {
+                backwardAccessDistances[rv].push_back(bMin[node]);
+            }
+            // if(rv%100000 == 0) {
+            //     std::cout<<"Forward Last Level of "<<rv<<": "<<forwardLastLevel<<std::endl;
+            //     std::cout<<"Backward Last Level of "<<rv<<": "<<backwardLastLevel<<std::endl;
+            //     std::cout<<"Forward Access Nodes of "<<rv<<": "<<forwardAccessNodes[rv].size()<<std::endl;
+            //     for(auto &node: forwardAccessNodes[rv]) {
+            //         std::cout<<node<<" "<<"level: "<<transitVertexToLevel[node]<<" distance: "<<fMin[node]<<std::endl;
+            //     }
+            //     std::cout<<std::endl;   
+            //     std::cout<<"Backward Access Nodes of "<<rv<<": "<<backwardAccessNodes[rv].size()<<std::endl;
+            //     for(auto &node: backwardAccessNodes[rv]) {
+            //         std::cout<<node<<" "<<"level: "<<transitVertexToLevel[node]<<" distance: "<<bMin[node]<< std::endl;
+            //     }
+            //     std::cout<<std::endl;
+            // }
         }
     });
 }
-
+//TODO: use PHAST to accelerate ditance table computation
 template<typename InputGraphT>
 void CTNRMetric<InputGraphT>::computeDistanceTable() {
     const int n = (int)transitNodes.size();
@@ -249,48 +268,23 @@ void CTNRMetric<InputGraphT>::computeDistanceTable() {
     }
 }
 
-// template<typename InputGraphT>
-// void CTNRMetric<InputGraphT>::pruneAccessNodesByDominance(auto &accessNodes, auto &accessDistances) {
-    
-//     for (int32_t v = 0; v < forwardAccessNodes.size(); ++v) {
-//         auto& an = accessNodes[v];
-//         auto& ad = accessDistances[v];
-        
-//         if (an.size() <= 1) continue;
-//         std::vector<int> keep(an.size(), 1);
-        
-//         for (size_t i = 0; i < an.size(); ++i) {
-//             if (!keep[i]) continue;
-//             for (size_t j = 0; j < an.size(); ++j) {
-//                 if (i == j || !keep[j]) continue;
-//                 int32_t dij = this->getTransitNodeDistance(an[i], an[j]);
-//                 if (dij == INFTY) continue;
-//                 if (ad[i] + dij <= ad[j]) keep[j] = 0;
-//             }
-//         }
-//         size_t w = 0;
-//         for (size_t i = 0; i < an.size(); ++i) if (keep[i]) {
-//             an[w] = an[i];
-//             ad[w] = ad[i];
-//             ++w;
-//         }
-//         an.resize(w);
-//         ad.resize(w);
-//     }
-// }
-
 template<typename InputGraphT>
 void CTNRMetric<InputGraphT>::pruneAccessNodesByDominance() {
-    auto pruneOne = [&](std::vector<int32_t>& nodes, std::vector<int32_t>& dists) {
+    auto pruneOne = [&](std::vector<int32_t>& nodes, std::vector<int32_t>& dists, bool isForward) {
         if (nodes.size() <= 1) return;
-        std::vector<int> keep(nodes.size(), 1);
+        std::vector<bool> keep(nodes.size(), true);
         for (size_t i = 0; i < nodes.size(); ++i) {
             if (!keep[i]) continue;
             for (size_t j = 0; j < nodes.size(); ++j) {
                 if (i == j || !keep[j]) continue;
-                int32_t dij = this->getTransitNodeDistance(nodes[i], nodes[j]);
+                int32_t dij;
+                dij = this->getTransitNodeDistance(nodes[i], nodes[j]);
                 if (dij == INFTY) continue;
-                if (dists[i] + dij <= dists[j]) keep[j] = 0;
+                if (isForward) {
+                    if (dists[i] + dij <= dists[j]) keep[j] = false;
+                }else{
+                    if (dists[j] + dij <= dists[i]) keep[i] = false;
+                }
             }
         }
         size_t w = 0;
@@ -304,10 +298,10 @@ void CTNRMetric<InputGraphT>::pruneAccessNodesByDominance() {
     };
 
     for (int32_t v = 0; v < (int32_t)forwardAccessNodes.size(); ++v) {
-        pruneOne(forwardAccessNodes[v], forwardAccessDistances[v]);
+        pruneOne(forwardAccessNodes[v], forwardAccessDistances[v], true);
     }
     for (int32_t v = 0; v < (int32_t)backwardAccessNodes.size(); ++v) {
-        pruneOne(backwardAccessNodes[v], backwardAccessDistances[v]);
+        pruneOne(backwardAccessNodes[v], backwardAccessDistances[v], false);
     }
 }
 
