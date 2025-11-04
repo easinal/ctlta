@@ -13,50 +13,55 @@ template<typename InputGraphT>
 class CTNRQuery {
 public:
     using InputGraph = InputGraphT;
-    using Metric = CTNRMetric<InputGraphT>;
     using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
 
     // Constructor
-    CTNRQuery(const Metric& metric)
-        : metric(metric),
-          ETquery(metric.getMinCH(), metric.getCCH().getEliminationTree()) {
-        forwardAccessNodes = &metric.getForwardAccessNodes();
-        forwardAccessDistances = &metric.getForwardAccessDistances();
-        backwardAccessNodes = &metric.getBackwardAccessNodes();
-        backwardAccessDistances = &metric.getBackwardAccessDistances();
-        transitNodeToDistanceTableIndex = &metric.gettransitNodeToDistanceTableIndex();
-        distanceTable = &metric.getDistanceTable();
-    }
+    CTNRQuery(const BalancedTopologyCentricTreeHierarchy &hierarchy, CTNRData &data, const CCH &cch,
+              const CH &minimumWeightedCH)
+            : hierarchy(hierarchy),
+              data(data),
+              forwardAccessNodes(data.getForwardAccessNodes()),
+              forwardAccessDistances(data.getForwardAccessDistances()),
+              backwardAccessNodes(data.getBackwardAccessNodes()),
+              backwardAccessDistances(data.getBackwardAccessDistances()),
+              transitNodeToDistanceTableIndex(data.gettransitNodeToDistanceTableIndex()),
+              distanceTable(data.getDistanceTable()),
+              ETquery(minimumWeightedCH, cch.getEliminationTree()) {}
 
     // Main query method (s, t are rank IDs)
     int32_t run(int32_t s, int32_t t) {
-        const uint32_t lca = metric.getHierarchy().getLowestCommonHub(s, t);
-        int lcaDepth = metric.separatorNodeToLevel[lca];
-        if( lcaDepth > metric.getTransitNodeThreshold()) {
+        const uint32_t lca = hierarchy.getLowestCommonHub(s, t);
+        int lcaDepth = data.getVertexLevel(lca);
+        KASSERT(lcaDepth == hierarchy.getVertexDepth(lca));
+        if (lcaDepth > data.getTransitNodeThreshold()) {
             lastModeIsLocal = true;
             // std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is not a transit node"<<std::endl;
             return localQuery(s, t);
-        }else{
+        } else {
             lastModeIsLocal = false;
             // std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is a transit node"<<std::endl;
             return transitNodeQuery(s, t, lcaDepth);
         }
     }
+
     int32_t getDistance() const { return lastDistance; }
-    const char* getLastMode() const { return lastModeIsLocal ? "local" : "transit"; }
+
+    const char *getLastMode() const { return lastModeIsLocal ? "local" : "transit"; }
 
 private:
-    const Metric& metric;
+    const BalancedTopologyCentricTreeHierarchy &hierarchy;
+    const CTNRData &data;
     int32_t lastDistance = INFTY;
     bool lastModeIsLocal = true;
-    
-    const std::vector<std::vector<int32_t>>* forwardAccessNodes;
-    const std::vector<std::vector<int32_t>>* forwardAccessDistances;
-    const std::vector<std::vector<int32_t>>* backwardAccessNodes;
-    const std::vector<std::vector<int32_t>>* backwardAccessDistances;
-    const std::unordered_map<int32_t, int32_t>* transitNodeToDistanceTableIndex;
-    const std::vector<std::vector<int32_t>>* distanceTable;
+
+    const std::vector<std::vector<int32_t>> &forwardAccessNodes;
+    const std::vector<std::vector<int32_t>> &forwardAccessDistances;
+    const std::vector<std::vector<int32_t>> &backwardAccessNodes;
+    const std::vector<std::vector<int32_t>> &backwardAccessDistances;
+    const std::unordered_map<int32_t, int32_t> &transitNodeToDistanceTableIndex;
+    const std::vector<std::vector<int32_t>> &distanceTable;
     EliminationTreeQuery<LabelSet> ETquery;
+
     // Local query using elimination tree
     int32_t localQuery(int32_t s, int32_t t) {
         //TODO: use distance bound from transit node query
@@ -67,15 +72,16 @@ private:
 
     // Transit node query using three-hop approach
     int32_t transitNodeQuery(int32_t s, int32_t t, int lcaNodeLevel) {
+        unused(lcaNodeLevel);
         int32_t minDist = INFTY;
-        
+
         // Access arrays are indexed by rank IDs
-        const auto &aS = (*forwardAccessNodes)[s]; 
-        const auto &dS = (*forwardAccessDistances)[s];
-        const auto &aT = (*backwardAccessNodes)[t];
-        const auto &dT = (*backwardAccessDistances)[t];
-        size_t candS = aS.size();
-        size_t candT = aT.size();
+        const auto &aS = forwardAccessNodes[s];
+        const auto &dS = forwardAccessDistances[s];
+        const auto &aT = backwardAccessNodes[t];
+        const auto &dT = backwardAccessDistances[t];
+//        size_t candS = aS.size();
+//        size_t candT = aT.size();
         size_t evaluated = 0;
         // std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
 
@@ -89,15 +95,15 @@ private:
         const size_t sBound = aS.size();
         const size_t tBound = aT.size();
 
-        for (int i = 0; i<sBound; ++i) {
+        for (int i = 0; i < sBound; ++i) {
             if (dS[i] >= minDist) continue;
 
 
-            for (int j = 0; j<tBound; ++j) {
-                if (dT[j] >= minDist) continue;            
+            for (int j = 0; j < tBound; ++j) {
+                if (dT[j] >= minDist) continue;
 
-                const int32_t mid = (*distanceTable)[aS[i]][aT[j]];
-                if (mid >= minDist) { 
+                const int32_t mid = distanceTable[aS[i]][aT[j]];
+                if (mid >= minDist) {
                     continue;
                 }
                 const int32_t total = dS[i] + mid + dT[j];
@@ -105,8 +111,8 @@ private:
                 if (total < minDist) minDist = total;
             }
         }
-        std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
-        std::cout << "candS: " << candS << ", candT: " << candT << ", validS: " << sBound << ", validT: " << tBound << ", evaluated: " << evaluated << std::endl;
+//        std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
+//        std::cout << "candS: " << candS << ", candT: " << candT << ", validS: " << sBound << ", validT: " << tBound << ", evaluated: " << evaluated << std::endl;
         lastDistance = minDist;
         return minDist;
     }

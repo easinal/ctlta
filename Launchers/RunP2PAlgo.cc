@@ -10,6 +10,9 @@
 #include <csv.h>
 #include <routingkit/nested_dissection.h>
 
+#include "Algorithms/CTNR/CTNRData.h"
+#include "Algorithms/CTNR/CTNRMetric.h"
+#include "Algorithms/CTNR/CTNRQuery.h"
 #include "Algorithms/CTL/BalancedTopologyCentricTreeHierarchy.h"
 #include "Algorithms/CTL/TruncatedTreeLabelling.h"
 #include "Algorithms/CTL/CTLMetric.h"
@@ -17,7 +20,6 @@
 #include "Algorithms/CCH/CCH.h"
 #include "Algorithms/CCH/CCHMetric.h"
 #include "Algorithms/CCH/EliminationTreeQuery.h"
-#include "Algorithms/CTNR/CTNR.h"
 #include "Algorithms/CH/CH.h"
 #include "Algorithms/CH/CHQuery.h"
 #include "Algorithms/Dijkstra/BiDijkstra.h"
@@ -344,26 +346,29 @@ inline void runQueries(const CommandLineParser &clp) {
         sepDecomp.readFrom(sepFile);
         sepFile.close();
 
+        // Build CCH and tree hierarchy
+        CCH cch;
+        cch.preprocess(graph, sepDecomp);
+
+        BalancedTopologyCentricTreeHierarchy hierarchy;
+        hierarchy.preprocess(graph, sepDecomp);
+
         // Build CTNR
-        CTNR<InputGraph> ctnr(sepDecomp, 5); // Use top k levels as transit nodes
-        ctnr.preprocess(graph);
+        CTNRData data(sepDecomp, hierarchy, 5); // first 5 levels are transit nodes
+        data.init();
+        CTNRMetric metric(cch, useLengths? &graph.length(0) : &graph.travelTime(0));
+
 
         // Customize CTNR
-        std::vector<int32_t> edgeWeights(graph.numEdges());
-        FORALL_EDGES(graph, e) {
-            edgeWeights[e] = useLengths ? graph.length(e) : graph.travelTime(e);
-        }
-        
-        ctnr.customize(edgeWeights.data());
+        metric.customize(data);
         
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
         // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
 
         // Use generic runQueries with CTNRQuery; pass CCH rank IDs to the algo
-        const auto &metric = ctnr.getMetric();
-        CTNRQuery<InputGraph> algo(metric);
-        runQueries(algo, demandFileName, outputFile, [&](const int v) { return ctnr.getCCH().getRanks()[v]; });
+        CTNRQuery<InputGraph> algo(hierarchy, data, cch, metric.getMinCH());
+        runQueries(algo, demandFileName, outputFile, [&](const int v) { return cch.getRanks()[v]; });
 
     } else {
 
@@ -515,9 +520,9 @@ inline void runPreprocessing(const CommandLineParser &clp) {
             outputFile << basicCustom << ',' << perfectCustom << ',' << construct << ',' << tot << '\n';
         }
 
-    } else if (algorithmName == "CTL") {
+    } else if (algorithmName == "CTL" || algorithmName == "CTNR") {
         // Run the preprocessing phase of CTL.
-        std::cout << "Constructing separator decomposition with strict dissection for CTL for " << graphFileName
+        std::cout << "Constructing separator decomposition with strict dissection for CTL/CTNR for " << graphFileName
                   << "... " << std::flush;
         Timer timer;
         if (imbalance < 0)
@@ -570,48 +575,93 @@ inline void runPreprocessing(const CommandLineParser &clp) {
             throw std::invalid_argument("file cannot be opened -- '" + outputFileName);
         sepDecomp.writeTo(outputFile);
 
-    } else if (algorithmName == "CTNR") {
-        std::cout << "CTNR preprocessing (using existing separator decomposition) for " << graphFileName
-                  << "... " << std::flush;
-        Timer timer;
-        std::string sepFileName = graphFileName;
-        size_t lastDot = sepFileName.find_last_of('.');
-        if (lastDot != std::string::npos) {
-            sepFileName = sepFileName.substr(0, lastDot);
-        }
-        sepFileName += ".strict_bisep.bin";
-        
-        // 读取现有的分隔分解文件
+    }
+//    else if (algorithmName == "CTNR") {
+//        std::cout << "CTNR preprocessing (using existing separator decomposition) for " << graphFileName
+//                  << "... " << std::flush;
+//        Timer timer;
+//        std::string sepFileName = graphFileName;
+//        size_t lastDot = sepFileName.find_last_of('.');
+//        if (lastDot != std::string::npos) {
+//            sepFileName = sepFileName.substr(0, lastDot);
+//        }
+//        sepFileName += ".strict_bisep.bin";
+//
+//        // 读取现有的分隔分解文件
+//        std::ifstream sepFile(sepFileName, std::ios::binary);
+//        if (!sepFile.good()) {
+//            std::cout << "Separator decomposition file not found: " << sepFileName << std::endl;
+//            std::cout << "Please run CTL preprocessing first to generate separator decomposition." << std::endl;
+//            return;
+//        }
+//
+//        SeparatorDecomposition sepDecomp;
+//        sepDecomp.readFrom(sepFile);
+//        sepFile.close();
+//
+//        std::cout << "Loaded separator decomposition with " << sepDecomp.tree.size() << " nodes" << std::endl;
+//
+//        // Build CTNR
+//        CTNR<InputGraph> ctnr(sepDecomp, 5); // Use top 5 levels as transit nodes
+//        ctnr.preprocess(graph);
+//
+//        std::cout << "CTNR preprocessing completed with " << ctnr.getTransitNodes().size()
+//                  << " transit nodes" << std::endl;
+//
+//        if (!endsWith(outputFileName, ".ctnr.bin"))
+//            outputFileName += ".ctnr.bin";
+//        std::ofstream outputFile(outputFileName, std::ios::binary);
+//        if (!outputFile.good())
+//            throw std::invalid_argument("file cannot be opened -- '" + outputFileName);
+//        // CTNR currently has no serialization; keep placeholder to match other modes
+//
+//        const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
+//        std::cout << " finished (" << preprocessTime << " microseconds)." << std::endl;
+//
+//    }
+    else if (algorithmName == "CTNR-custom") {
+
+        // Run the customization phase of CTNR.
         std::ifstream sepFile(sepFileName, std::ios::binary);
-        if (!sepFile.good()) {
-            std::cout << "Separator decomposition file not found: " << sepFileName << std::endl;
-            std::cout << "Please run CTL preprocessing first to generate separator decomposition." << std::endl;
-            return;
-        }
-        
-        SeparatorDecomposition sepDecomp;
-        sepDecomp.readFrom(sepFile);
+        if (!sepFile.good())
+            throw std::invalid_argument("file not found -- '" + sepFileName + "'");
+        SeparatorDecomposition decomp;
+        decomp.readFrom(sepFile);
         sepFile.close();
-        
-        std::cout << "Loaded separator decomposition with " << sepDecomp.tree.size() << " nodes" << std::endl;
+
+        if (!endsWith(outputFileName, ".csv"))
+            outputFileName += ".csv";
+        std::ofstream outputFile(outputFileName);
+        if (!outputFile.good())
+            throw std::invalid_argument("file cannot be opened -- '" + outputFileName + ".csv'");
+        outputFile << "# Graph: " << graphFileName << '\n';
+        outputFile << "# Separator: " << sepFileName << '\n';
+
+        Timer timer;
+        // Build CCH and tree hierarchy
+        CCH cch;
+        cch.preprocess(graph, decomp);
+
+        BalancedTopologyCentricTreeHierarchy hierarchy;
+        hierarchy.preprocess(graph, decomp);
 
         // Build CTNR
-        CTNR<InputGraph> ctnr(sepDecomp, 5); // Use top 5 levels as transit nodes
-        ctnr.preprocess(graph);
-        
-        std::cout << "CTNR preprocessing completed with " << ctnr.getTransitNodes().size() 
-                  << " transit nodes" << std::endl;
+        CTNRData data(decomp, hierarchy, 5); // first 5 levels are transit nodes
+        data.init();
 
-        if (!endsWith(outputFileName, ".ctnr.bin"))
-            outputFileName += ".ctnr.bin";
-        std::ofstream outputFile(outputFileName, std::ios::binary);
-        if (!outputFile.good())
-            throw std::invalid_argument("file cannot be opened -- '" + outputFileName);
-        // CTNR currently has no serialization; keep placeholder to match other modes
-        
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
-        std::cout << " finished (" << preprocessTime << " microseconds)." << std::endl;
+        outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
 
+        outputFile << "cch_customization,access_node_computation,distance_table_computation,access_node_pruning,total_time\n";
+        int64_t cchCustom, accessNodeComp, distTableComp, accessNodePrun, tot;
+        timer.restart();
+        for (auto i = 0; i < numCustomRuns; ++i) {
+            CTNRMetric metric(cch, useLengths? &graph.length(0) : &graph.travelTime(0));
+            timer.restart();
+            metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp, accessNodePrun);
+            tot = timer.elapsed<std::chrono::microseconds>();
+            outputFile << cchCustom << ',' << accessNodeComp << ',' << distTableComp << ',' << accessNodePrun << ',' << tot << '\n';
+        }
     } else if (algorithmName == "CTL-custom") {
 
         // Run the customization phase of CCH.
@@ -649,7 +699,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         int cchCustom, ctlCustom, tot;
         for (auto i = 0; i < numCustomRuns; ++i) {
             {
-                CCHMetric metric(cch, &graph.travelTime(0));
+                CCHMetric metric(cch, useLengths? &graph.length(0) : &graph.travelTime(0));
                 timer.restart();
                 if constexpr (CTL_USE_PERFECT_CUSTOMIZATION) {
                     metric.buildMinimumWeightedCH();
@@ -659,7 +709,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
                 cchCustom = timer.elapsed<std::chrono::microseconds>();
             }
             {
-                CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch, &graph.travelTime(0));
+                CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
                 timer.restart();
                 metric.buildCustomizedCTL(ctl);
                 tot = timer.elapsed<std::chrono::microseconds>();
