@@ -7,6 +7,7 @@
 #include "DataStructures/Partitioning/SeparatorDecomposition.h"
 #include "Tools/Constants.h"
 #include "Algorithms/CTNR/CTNRData.h"
+#include "TransitNodeHierarchy.h"
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -15,10 +16,10 @@
 
 class CTNRMetric {
 public:
-    
+
     // Constructor
-    CTNRMetric(const CCH& cch, const int32_t *const inputWeights)
-        : cch(cch), cchMetric(cch, inputWeights) {}
+    CTNRMetric(const TransitNodeHierarchy& hierarchy, const CCH &cch, const int32_t *const inputWeights)
+            : hierarchy(hierarchy), cch(cch), cchMetric(cch, inputWeights) {}
 
 //    // Preprocessing phase
 //    void preprocess(const InputGraph& inputGraph) {
@@ -35,15 +36,21 @@ public:
 //    }
 
     // Customization phase
-    void customize(CTNRData& data) {
+    void customize(CTNRData &data) {
         int64_t dummy1, dummy2, dummy3, dummy4;
         customizeWithMeasurements(data, dummy1, dummy2, dummy3, dummy4);
     }
 
     // Sets measurement parameters to times for each step in microseconds.
-    void customizeWithMeasurements(CTNRData& data, int64_t& cchCustomizationTime, int64_t& accessNodeComputationTime,
-                                  int64_t& distanceTableComputationTime, int64_t& accessNodePruningTime) {
-        KASSERT(data.forwardAccessNodes.size() == cch.getUpwardGraph().numVertices(), "Data not initialized.");
+    void customizeWithMeasurements(CTNRData &data, int64_t &cchCustomizationTime, int64_t &accessNodeComputationTime,
+                                   int64_t &distanceTableComputationTime, int64_t &accessNodePruningTime) {
+
+        const int numVertices = cch.getUpwardGraph().numVertices();
+        data.forwardAccessNodes.resize(numVertices);
+        data.forwardAccessDistances.resize(numVertices);
+        data.backwardAccessNodes.resize(numVertices);
+        data.backwardAccessDistances.resize(numVertices);
+
         Timer timer;
         minCH = cchMetric.buildMinimumWeightedCH();
         cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
@@ -59,28 +66,32 @@ public:
     }
 
     // Getters
-    const CH& getMinCH() const { return minCH; }
+    const CH &getMinCH() const { return minCH; }
+
     // Memory usage calculation including node levels
     uint64_t sizeInBytes() const {
         uint64_t size = sizeof(CTNRMetric);
         size += cchMetric.sizeInBytes();
         size += minCH.sizeInBytes();
-        
+
         return size;
     }
 
 private:
     // Core data structures
-    const CCH& cch;
+    const TransitNodeHierarchy& hierarchy;
+    const CCH &cch;
     CCHMetric cchMetric;
     CH minCH;
 
     // Helper methods
-    void computeAccessNodes(CTNRData& data);
+    void computeAccessNodes(CTNRData &data);
+
     void computeDistanceTable(CTNRData &data);
+
     void pruneAccessNodesByDominance(CTNRData &data);
 //    int32_t getTransitNodeDistance(int32_t accessS, int32_t accessT) const;
-    
+
 };
 
 // Template implementation
@@ -92,19 +103,18 @@ private:
 #include <iostream>
 
 
+void CTNRMetric::computeAccessNodes(CTNRData &data) {
 
-void CTNRMetric::computeAccessNodes(CTNRData& data) {
-
-    auto compareByLevel = [&](int32_t a, int32_t b) {
-        return data.transitVertexToLevel[a] < data.transitVertexToLevel[b];
+    auto compareByLevelAndRank = [&](int32_t a, int32_t b) {
+        return hierarchy.getVertexLevel(a) < hierarchy.getVertexLevel(b) || (hierarchy.getVertexLevel(a) == hierarchy.getVertexLevel(b) && a > b);
     };
     cch.forEachVertexTopDown([&](int32_t rv) {
-        if(data.transitVertexToLevel.find(rv) != data.transitVertexToLevel.end()) {
-            data.forwardAccessNodes[rv].push_back(rv);
-            data.forwardAccessDistances[rv].push_back(0);
-            data.backwardAccessNodes[rv].push_back(rv);
-            data.backwardAccessDistances[rv].push_back(0);
-        }else{
+        if (hierarchy.isTransitNode(rv)) {
+            data.forwardAccessNodes[rv] = {hierarchy.getTransitNodeIndexOfRank(rv)};
+            data.forwardAccessDistances[rv] = {0};
+            data.backwardAccessNodes[rv] = {hierarchy.getTransitNodeIndexOfRank(rv)};
+            data.backwardAccessDistances[rv] = {0};
+        } else {
             std::unordered_map<int, int> fMin;
             std::unordered_map<int, int> bMin;
 
@@ -113,25 +123,25 @@ void CTNRMetric::computeAccessNodes(CTNRData& data) {
                 const int wUp = cchMetric.upwardWeights()[e];
                 const int wDown = cchMetric.downwardWeights()[e];
 
-                if(wUp != INFTY) {
-                    const auto& fa = data.forwardAccessNodes[neighbor];
-                    const auto& fd = data.forwardAccessDistances[neighbor];
+                if (wUp != INFTY) {
+                    const auto &fa = data.forwardAccessNodes[neighbor];
+                    const auto &fd = data.forwardAccessDistances[neighbor];
                     for (size_t i = 0; i < fa.size(); ++i) {
-                        const int rTN = fa[i];
-                            const int dist = fd[i] + wUp;
-                            auto it = fMin.find(rTN);
-                            if (it == fMin.end() || dist < it->second) fMin[rTN] = dist;
+                        const int iTN = fa[i];
+                        const int dist = fd[i] + wUp;
+                        auto it = fMin.find(iTN);
+                        if (it == fMin.end() || dist < it->second) fMin[iTN] = dist;
                     }
                 }
 
-                if(wDown != INFTY) {
-                    const auto& ba = data.backwardAccessNodes[neighbor];
-                    const auto& bd = data.backwardAccessDistances[neighbor];
+                if (wDown != INFTY) {
+                    const auto &ba = data.backwardAccessNodes[neighbor];
+                    const auto &bd = data.backwardAccessDistances[neighbor];
                     for (size_t i = 0; i < ba.size(); ++i) {
-                        const int rTN = ba[i];
-                            const int dist = bd[i] + wDown;
-                            auto it = bMin.find(rTN);
-                            if (it == bMin.end() || dist < it->second) bMin[rTN] = dist;   
+                        const int iTN = ba[i];
+                        const int dist = bd[i] + wDown;
+                        auto it = bMin.find(iTN);
+                        if (it == bMin.end() || dist < it->second) bMin[iTN] = dist;
                     }
                 }
             }
@@ -145,10 +155,10 @@ void CTNRMetric::computeAccessNodes(CTNRData& data) {
             data.forwardAccessDistances[rv].reserve(fMin.size());
             data.backwardAccessNodes[rv].reserve(bMin.size());
             data.backwardAccessDistances[rv].reserve(bMin.size());
-            for (const auto& kv : fMin) { data.forwardAccessNodes[rv].push_back(kv.first); }
-            for (const auto& kv : bMin) { data.backwardAccessNodes[rv].push_back(kv.first); }
-            sort(data.forwardAccessNodes[rv].begin(), data.forwardAccessNodes[rv].end(), compareByLevel);
-            sort(data.backwardAccessNodes[rv].begin(), data.backwardAccessNodes[rv].end(), compareByLevel);
+            for (const auto &kv: fMin) { data.forwardAccessNodes[rv].push_back(kv.first); }
+            for (const auto &kv: bMin) { data.backwardAccessNodes[rv].push_back(kv.first); }
+            sort(data.forwardAccessNodes[rv].begin(), data.forwardAccessNodes[rv].end(), compareByLevelAndRank);
+            sort(data.backwardAccessNodes[rv].begin(), data.backwardAccessNodes[rv].end(), compareByLevelAndRank);
 
             for (auto &node: data.forwardAccessNodes[rv]) {
                 data.forwardAccessDistances[rv].push_back(fMin[node]);
@@ -156,26 +166,13 @@ void CTNRMetric::computeAccessNodes(CTNRData& data) {
             for (auto &node: data.backwardAccessNodes[rv]) {
                 data.backwardAccessDistances[rv].push_back(bMin[node]);
             }
-            // if(rv%100000 == 0) {
-            //     std::cout<<"Forward Last Level of "<<rv<<": "<<forwardLastLevel<<std::endl;
-            //     std::cout<<"Backward Last Level of "<<rv<<": "<<backwardLastLevel<<std::endl;
-            //     std::cout<<"Forward Access Nodes of "<<rv<<": "<<forwardAccessNodes[rv].size()<<std::endl;
-            //     for(auto &node: forwardAccessNodes[rv]) {
-            //         std::cout<<node<<" "<<"level: "<<transitVertexToLevel[node]<<" distance: "<<fMin[node]<<std::endl;
-            //     }
-            //     std::cout<<std::endl;   
-            //     std::cout<<"Backward Access Nodes of "<<rv<<": "<<backwardAccessNodes[rv].size()<<std::endl;
-            //     for(auto &node: backwardAccessNodes[rv]) {
-            //         std::cout<<node<<" "<<"level: "<<transitVertexToLevel[node]<<" distance: "<<bMin[node]<< std::endl;
-            //     }
-            //     std::cout<<std::endl;
-            // }
         }
     });
 }
+
 //TODO: use PHAST to accelerate distance table computation
 void CTNRMetric::computeDistanceTable(CTNRData &data) {
-    const int n = (int)data.transitNodes.size();
+    const int n = hierarchy.numTransitNodes();
     data.distanceTable.assign(n, std::vector<int32_t>(n, INFTY));
     using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
 #pragma omp parallel
@@ -188,19 +185,15 @@ void CTNRMetric::computeDistanceTable(CTNRData &data) {
                     data.distanceTable[i][j] = 0;
                     continue;
                 }
-                chq.run(data.transitNodes[i], data.transitNodes[j]);
+                chq.run(hierarchy.getRankOfTransitNodeIndex(i), hierarchy.getRankOfTransitNodeIndex(j));
                 data.distanceTable[i][j] = chq.getDistance();
-                // std::cout<<"distanceTable["<<i<<"]["<<j<<"]: "<<distanceTable[i][j]<<std::endl;
             }
         }
     }
 }
 
 void CTNRMetric::pruneAccessNodesByDominance(CTNRData &data) {
-    auto pruneOne = [&](std::vector<int32_t>& nodes, std::vector<int32_t>& dists, bool isForward) {
-        for(int i = 0; i < nodes.size(); ++i) {
-            nodes[i] = data.transitNodeToDistanceTableIndex[nodes[i]];
-        }
+    auto pruneOne = [&](std::vector<int32_t> &nodes, std::vector<int32_t> &dists, bool isForward) {
         if (nodes.size() <= 1) return;
         std::vector<bool> keep(nodes.size(), true);
         for (size_t i = 0; i < nodes.size(); ++i) {
@@ -212,25 +205,26 @@ void CTNRMetric::pruneAccessNodesByDominance(CTNRData &data) {
                 if (dij == INFTY) continue;
                 if (isForward) {
                     if (dists[i] + dij <= dists[j]) keep[j] = false;
-                }else{
+                } else {
                     if (dists[j] + dij <= dists[i]) keep[i] = false;
                 }
             }
         }
         size_t w = 0;
-        for (size_t i = 0; i < nodes.size(); ++i) if (keep[i]) {
-            nodes[w] = nodes[i];
-            dists[w] = dists[i];
-            ++w;
-        }
+        for (size_t i = 0; i < nodes.size(); ++i)
+            if (keep[i]) {
+                nodes[w] = nodes[i];
+                dists[w] = dists[i];
+                ++w;
+            }
         nodes.resize(w);
         dists.resize(w);
     };
 
-    for (int32_t v = 0; v < (int32_t)data.forwardAccessNodes.size(); ++v) {
+    for (int32_t v = 0; v < (int32_t) data.forwardAccessNodes.size(); ++v) {
         pruneOne(data.forwardAccessNodes[v], data.forwardAccessDistances[v], true);
     }
-    for (int32_t v = 0; v < (int32_t)data.backwardAccessNodes.size(); ++v) {
+    for (int32_t v = 0; v < (int32_t) data.backwardAccessNodes.size(); ++v) {
         pruneOne(data.backwardAccessNodes[v], data.backwardAccessDistances[v], false);
     }
 }

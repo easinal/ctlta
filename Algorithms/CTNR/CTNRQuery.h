@@ -16,7 +16,7 @@ public:
     using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
 
     // Constructor
-    CTNRQuery(const BalancedTopologyCentricTreeHierarchy &hierarchy, CTNRData &data, const CCH &cch,
+    CTNRQuery(const TransitNodeHierarchy &hierarchy, CTNRData &data, const CCH &cch,
               const CH &minimumWeightedCH)
             : hierarchy(hierarchy),
               data(data),
@@ -24,23 +24,20 @@ public:
               forwardAccessDistances(data.getForwardAccessDistances()),
               backwardAccessNodes(data.getBackwardAccessNodes()),
               backwardAccessDistances(data.getBackwardAccessDistances()),
-              transitNodeToDistanceTableIndex(data.gettransitNodeToDistanceTableIndex()),
               distanceTable(data.getDistanceTable()),
               ETquery(minimumWeightedCH, cch.getEliminationTree()) {}
 
     // Main query method (s, t are rank IDs)
     int32_t run(int32_t s, int32_t t) {
-        const uint32_t lca = hierarchy.getLowestCommonHub(s, t);
-        int lcaDepth = data.getVertexLevel(lca);
-        KASSERT(lcaDepth == hierarchy.getVertexDepth(lca));
-        if (lcaDepth > data.getTransitNodeThreshold()) {
+        const auto lcaLevel = hierarchy.getLevelOfLowestCommonAncestor(s, t);
+        if (lcaLevel >= hierarchy.getTransitNodeThreshold()) {
             lastModeIsLocal = true;
-            // std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is not a transit node"<<std::endl;
             return localQuery(s, t);
         } else {
             lastModeIsLocal = false;
-            // std::cout<<"lca: "<<lca<<", depth: "<<lcaDepth<<", is a transit node"<<std::endl;
-            return transitNodeQuery(s, t, lcaDepth);
+            const int32_t tnDist = transitNodeQuery(s, t, lcaLevel);
+            KASSERT(tnDist == localQuery(s,t));
+            return tnDist;
         }
     }
 
@@ -49,7 +46,7 @@ public:
     const char *getLastMode() const { return lastModeIsLocal ? "local" : "transit"; }
 
 private:
-    const BalancedTopologyCentricTreeHierarchy &hierarchy;
+    const TransitNodeHierarchy &hierarchy;
     const CTNRData &data;
     int32_t lastDistance = INFTY;
     bool lastModeIsLocal = true;
@@ -58,7 +55,6 @@ private:
     const std::vector<std::vector<int32_t>> &forwardAccessDistances;
     const std::vector<std::vector<int32_t>> &backwardAccessNodes;
     const std::vector<std::vector<int32_t>> &backwardAccessDistances;
-    const std::unordered_map<int32_t, int32_t> &transitNodeToDistanceTableIndex;
     const std::vector<std::vector<int32_t>> &distanceTable;
     EliminationTreeQuery<LabelSet> ETquery;
 
@@ -82,7 +78,7 @@ private:
         const auto &dT = backwardAccessDistances[t];
 //        size_t candS = aS.size();
 //        size_t candT = aT.size();
-        size_t evaluated = 0;
+//        size_t evaluated = 0;
         // std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;
 
         // const auto byLevel = [&](int level, int v){
@@ -100,15 +96,16 @@ private:
 
 
             for (int j = 0; j < tBound; ++j) {
-                if (dT[j] >= minDist) continue;
+//                if (dT[j] >= minDist) continue;
 
                 const int32_t mid = distanceTable[aS[i]][aT[j]];
-                if (mid >= minDist) {
-                    continue;
-                }
+//                if (mid >= minDist) {
+//                    continue;
+//                }
                 const int32_t total = dS[i] + mid + dT[j];
-                ++evaluated;
-                if (total < minDist) minDist = total;
+//                ++evaluated;
+                if (total < minDist)
+                    minDist = total;
             }
         }
 //        std::cout<<"lcaNodeLevel: "<<lcaNodeLevel<<std::endl;

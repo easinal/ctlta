@@ -350,14 +350,12 @@ inline void runQueries(const CommandLineParser &clp) {
         CCH cch;
         cch.preprocess(graph, sepDecomp);
 
-        BalancedTopologyCentricTreeHierarchy hierarchy;
-        hierarchy.preprocess(graph, sepDecomp);
+        TransitNodeHierarchy hierarchy;
+        hierarchy.preprocess(graph, sepDecomp, 5); // first 5 levels are transit nodes
 
         // Build CTNR
-        CTNRData data(sepDecomp, hierarchy, 5); // first 5 levels are transit nodes
-        data.init();
-        CTNRMetric metric(cch, useLengths? &graph.length(0) : &graph.travelTime(0));
-
+        CTNRData data;
+        CTNRMetric metric(hierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
 
         // Customize CTNR
         metric.customize(data);
@@ -642,12 +640,11 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         CCH cch;
         cch.preprocess(graph, decomp);
 
-        BalancedTopologyCentricTreeHierarchy hierarchy;
-        hierarchy.preprocess(graph, decomp);
+        TransitNodeHierarchy hierarchy;
+        hierarchy.preprocess(graph, decomp, 5); // first 5 levels are transit nodes
 
         // Build CTNR
-        CTNRData data(decomp, hierarchy, 5); // first 5 levels are transit nodes
-        data.init();
+        CTNRData data;
 
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
@@ -656,7 +653,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         int64_t cchCustom, accessNodeComp, distTableComp, accessNodePrun, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
-            CTNRMetric metric(cch, useLengths? &graph.length(0) : &graph.travelTime(0));
+            CTNRMetric metric(hierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
             timer.restart();
             metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp, accessNodePrun);
             tot = timer.elapsed<std::chrono::microseconds>();
