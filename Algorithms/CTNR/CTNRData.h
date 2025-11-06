@@ -17,7 +17,7 @@ public:
         int32_t distance = INFTY; // distance to/from access node
     };
 
-    CTNRData(const int numTransitNodes) :
+    explicit CTNRData(const int numTransitNodes) :
     numTransitNodes(numTransitNodes),
     distanceTable(numTransitNodes * numTransitNodes, INFTY) {}
 

@@ -27,6 +27,45 @@ class CTNRMetric {
         int32_t end = INVALID_INDEX;
     };
 
+
+    class AccessNodeUnifier {
+
+    public:
+
+        explicit AccessNodeUnifier(const int numTransitNodes) : nodes(), distances(numTransitNodes, INFTY) {
+            nodes.reserve(numTransitNodes);
+        }
+
+        void addAccessNode(const int32_t nodeIndex, const int32_t distance) {
+            int32_t &entry = distances[nodeIndex];
+            if (entry == INFTY) {
+                // New entry
+                entry = distance;
+                nodes.push_back(nodeIndex);
+            } else {
+                // Existing entry for this vertex
+                if (distance < entry) {
+                    entry = distance;
+                }
+            }
+        }
+
+        void flushAccessNodes(std::vector<CTNRData::AccessNode> &outAccessNodes) {
+            std::sort(nodes.begin(), nodes.end());
+            for (const int & node : nodes) {
+                int32_t &entry = distances[node];
+                CTNRData::AccessNode an(node, entry);
+                outAccessNodes.push_back(an);
+                entry = INFTY; // reset for next use
+            }
+            nodes.clear();
+        }
+
+    private:
+        std::vector<int> nodes; // list of transit node indices
+        std::vector<int32_t> distances;
+    };
+
 public:
 
     // Constructor
@@ -69,10 +108,6 @@ private:
 
     void computeAccessNodes(CTNRData &data) {
 
-        auto compareByTransitNodeIndex = [&](const CTNRData::AccessNode &an, const CTNRData::AccessNode &bn) {
-            return an.nodeIndex < bn.nodeIndex;
-        };
-
         int numVertices = cch.getUpwardGraph().numVertices();
 
         // Count the number of access nodes per vertex in data.forwardPos/data.backwardPos. Later, a prefix sum in
@@ -86,8 +121,7 @@ private:
         KASSERT(forwardRange.size() == numVertices && backwardRange.size() == numVertices);
         forwardAccessTemp.clear();
         backwardAccessTemp.clear();
-        std::unordered_map<int, int> fMin;
-        std::unordered_map<int, int> bMin;
+        AccessNodeUnifier unifier(hierarchy.numTransitNodes());
 
         const auto &upGraph = minCH.upwardGraph();
         const auto &downGraph = minCH.downwardGraph();
@@ -101,7 +135,6 @@ private:
                 forwardRange[rv].end = static_cast<int32_t>(forwardAccessTemp.size());
                 backwardRange[rv].end = static_cast<int32_t>(backwardAccessTemp.size());
             } else {
-                fMin.clear();
                 FORALL_INCIDENT_EDGES(upGraph, rv, e) {
                     const int neighbor = upGraph.edgeHead(e);
                     const int wUp = upGraph.traversalCost(e);
@@ -112,12 +145,12 @@ private:
                             forwardAccessTemp.begin() + forwardRange[neighbor].end);
                     for (const auto &an: neighborAccess) {
                         const int dist = wUp + an.distance;
-                        auto it = fMin.find(an.nodeIndex);
-                        if (it == fMin.end() || dist < it->second) fMin[an.nodeIndex] = dist;
+                        unifier.addAccessNode(an.nodeIndex, dist);
                     }
                 }
+                unifier.flushAccessNodes(forwardAccessTemp);
+                forwardRange[rv].end = static_cast<int32_t>(forwardAccessTemp.size());
 
-                bMin.clear();
                 FORALL_INCIDENT_EDGES(downGraph, rv, e) {
                     const int neighbor = downGraph.edgeHead(e);
                     const int wDown = downGraph.traversalCost(e);
@@ -128,20 +161,11 @@ private:
                             backwardAccessTemp.begin() + backwardRange[neighbor].end);
                     for (const auto &an: neighborAccess) {
                         const int dist = an.distance + wDown;
-                        auto it = bMin.find(an.nodeIndex);
-                        if (it == bMin.end() || dist < it->second) bMin[an.nodeIndex] = dist;
+                        unifier.addAccessNode(an.nodeIndex, dist);
                     }
                 }
-
-                for (const auto &kv: fMin) { forwardAccessTemp.push_back({kv.first, kv.second}); }
-                for (const auto &kv: bMin) { backwardAccessTemp.push_back({kv.first, kv.second}); }
-
-                forwardRange[rv].end = static_cast<int32_t>(forwardAccessTemp.size());
+                unifier.flushAccessNodes(backwardAccessTemp);
                 backwardRange[rv].end = static_cast<int32_t>(backwardAccessTemp.size());
-                sort(forwardAccessTemp.begin() + forwardRange[rv].start, forwardAccessTemp.end(),
-                     compareByTransitNodeIndex);
-                sort(backwardAccessTemp.begin() + backwardRange[rv].start, backwardAccessTemp.end(),
-                     compareByTransitNodeIndex);
 
                 // Prune access nodes based on domination between each other
                 int endOfNonDominated = forwardRange[rv].start;
@@ -217,10 +241,14 @@ private:
                       data.backwardAccess.begin() + data.backwardPos[v]);
             KASSERT(std::is_sorted(data.forwardAccess.begin() + data.forwardPos[v],
                                    data.forwardAccess.begin() + data.forwardPos[v + 1],
-                                   compareByTransitNodeIndex));
+                                   [&](const CTNRData::AccessNode &a, const CTNRData::AccessNode &b) {
+                                       return a.nodeIndex < b.nodeIndex;
+                                   }));
             KASSERT(std::is_sorted(data.backwardAccess.begin() + data.backwardPos[v],
                                    data.backwardAccess.begin() + data.backwardPos[v + 1],
-                                   compareByTransitNodeIndex));
+                                   [&](const CTNRData::AccessNode &a, const CTNRData::AccessNode &b) {
+                                       return a.nodeIndex < b.nodeIndex;
+                                   }));
         }
     }
 
