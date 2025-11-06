@@ -354,7 +354,7 @@ inline void runQueries(const CommandLineParser &clp) {
         hierarchy.preprocess(graph, sepDecomp, 5); // first 5 levels are transit nodes
 
         // Build CTNR
-        CTNRData data;
+        CTNRData data(hierarchy.numTransitNodes());
         CTNRMetric metric(hierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
 
         // Customize CTNR
@@ -644,20 +644,20 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         hierarchy.preprocess(graph, decomp, 5); // first 5 levels are transit nodes
 
         // Build CTNR
-        CTNRData data;
+        CTNRData data(hierarchy.numTransitNodes());
 
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
 
-        outputFile << "cch_customization,access_node_computation,distance_table_computation,access_node_pruning,total_time\n";
-        int64_t cchCustom, accessNodeComp, distTableComp, accessNodePrun, tot;
+        outputFile << "cch_customization,access_node_computation,distance_table_computation,total_time\n";
+        int64_t cchCustom, accessNodeComp, distTableComp, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
             CTNRMetric metric(hierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
             timer.restart();
-            metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp, accessNodePrun);
+            metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp);
             tot = timer.elapsed<std::chrono::microseconds>();
-            outputFile << cchCustom << ',' << accessNodeComp << ',' << distTableComp << ',' << accessNodePrun << ',' << tot << '\n';
+            outputFile << cchCustom << ',' << accessNodeComp << ',' << distTableComp << ',' << tot << '\n';
         }
     } else if (algorithmName == "CTL-custom") {
 
