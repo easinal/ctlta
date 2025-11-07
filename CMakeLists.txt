@@ -28,6 +28,13 @@ if(DISABLE_AVX)
   endif()
 endif()
 
+# Include frame pointer information for better stack traces.
+if(CMAKE_CXX_COMPILER_ID MATCHES GNU|Clang)
+  if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
+  endif()
+endif()
+
 # Request warnings.
 if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
   set(FULL_WARNINGS "-Werror" "-Wfatal-errors" "-Wpedantic" "-pedantic-errors" "-Wall" "-Wextra" "-ftemplate-backtrace-limit=1" "-Wno-unknown-pragmas" "-Wno-sign-compare")
@@ -42,6 +49,7 @@ find_package(Boost REQUIRED)
 find_package(OpenMP)
 find_package(CGAL REQUIRED)
 find_library(cairo_LIBRARY cairo)
+#message("OpenMP library path: ${OpenMP_CXX_LIBRARIES}")
 
 include(FetchContentDependencies.cmake)
 add_subdirectory(External)

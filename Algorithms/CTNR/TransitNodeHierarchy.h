@@ -41,6 +41,17 @@ public:
 
         KASSERT(std::all_of(packedSideIds.begin(), packedSideIds.end(),
                             [](const uint64_t &id) { return id != static_cast<uint64_t>(-1); }));
+
+//        // Todo: remove debug
+//        // Count number of vertices in each level and print
+//        std::vector<size_t> levelCounts(sdDepth, 0);
+//        for (const auto &level: vertexLevel) {
+//            KASSERT(level < sdDepth);
+//            ++levelCounts[level];
+//        }
+//        for (size_t level = 0; level < levelCounts.size(); ++level) {
+//            std::cout << "SepDecomp Level " << level << ": " << levelCounts[level] << " vertices" << std::endl;
+//        }
     }
 
     size_t numVertices() const {
@@ -97,6 +108,11 @@ public:
                packedSideIds.size() * sizeof(decltype(packedSideIds)::value_type) +
                transitNodes.capacity() * sizeof(decltype(transitNodes)::value_type) +
                transitNodeToDistanceTableIndex.size() * (sizeof(int32_t) + sizeof(int32_t));
+    }
+
+    // TODO: remove debug getter for transit nodes
+    const std::vector<int32_t> &getTransitNodes() const {
+        return transitNodes;
     }
 
 private:

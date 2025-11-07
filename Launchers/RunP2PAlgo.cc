@@ -354,7 +354,7 @@ inline void runQueries(const CommandLineParser &clp) {
         hierarchy.preprocess(graph, sepDecomp, 5); // first 5 levels are transit nodes
 
         // Build CTNR
-        CTNRData data(hierarchy.numTransitNodes());
+        CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
         CTNRMetric metric(hierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
 
         // Customize CTNR
@@ -644,7 +644,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         hierarchy.preprocess(graph, decomp, 5); // first 5 levels are transit nodes
 
         // Build CTNR
-        CTNRData data(hierarchy.numTransitNodes());
+        CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
 
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";

@@ -17,8 +17,9 @@ public:
         int32_t distance = INFTY; // distance to/from access node
     };
 
-    explicit CTNRData(const int numTransitNodes) :
+    explicit CTNRData(const int numTransitNodes, const int numVertices) :
     numTransitNodes(numTransitNodes),
+    numVertices(numVertices),
     distanceTable(numTransitNodes * numTransitNodes, INFTY) {}
 
     // Input: Internal transit node index of access nodes.
@@ -27,11 +28,11 @@ public:
     }
 
     ConstantVectorRange<AccessNode> getForwardAccessNodes(const int v) const {
-        return {forwardAccess.begin() + forwardPos[v], forwardAccess.begin() + forwardPos[v + 1]};
+        return {forwardAccess.begin() + forwardPos[rankToIdx(v)], forwardAccess.begin() + forwardPos[rankToIdx(v) + 1]};
     }
 
     ConstantVectorRange<AccessNode> getBackwardAccessNodes(const int v) const {
-        return {backwardAccess.begin() + backwardPos[v], backwardAccess.begin() + backwardPos[v + 1]};
+        return {backwardAccess.begin() + backwardPos[rankToIdx(v)], backwardAccess.begin() + backwardPos[rankToIdx(v) + 1]};
     }
 
     // Memory usage calculation including node levels
@@ -49,6 +50,12 @@ public:
 
 private:
 
+    // Get internal vertex index for CCH rank r.
+    // Invert ranks for sequential writing order during top-down access node construction.
+    inline int rankToIdx(const int r) const {
+        return numVertices - 1 - r ;
+    }
+
     void resetDistanceTable() {
         distanceTable.assign(numTransitNodes * numTransitNodes, INFTY);
     }
@@ -61,6 +68,7 @@ private:
     friend class CTNRMetric;
 
     int numTransitNodes;
+    int numVertices;
 
     // Range of forward access nodes for vertex v is stored in forwardAccess[forwardPos[v]..forwardPos[v+1]-1]
     std::vector<int32_t> forwardPos;
