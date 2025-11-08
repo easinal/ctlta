@@ -341,6 +341,7 @@ private:
                 //  Memory overhead should be okay since the elim-tree branch up to a transit node is short.
                 //  This only improves cache behavior if we iterate over j (the lower node) in the outer loop and i
                 //  (the higher node) in the inner loop. Though that should not be a problem (hopefully).
+                KASSERT(dataAccess[j].nodeIndex < dataAccess[i].nodeIndex);
                 const int dTransit = forward ?
                                data.getDistanceBetweenTransitNodes(dataAccess[j].nodeIndex, dataAccess[i].nodeIndex) :
                                data.getDistanceBetweenTransitNodes(dataAccess[i].nodeIndex, dataAccess[j].nodeIndex);

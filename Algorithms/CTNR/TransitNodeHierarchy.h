@@ -225,9 +225,9 @@ private:
 
         forEachSepDecompNodeInDfsOrder(sd, recurse, backtrack);
 
-        // Re-order transit nodes by level and rank, and build mapping from CCH rank to index within transit nodes
+        // Re-order transit nodes by decreasing level and increasing rank, and build mapping from CCH rank to index within transit nodes
         auto compareByLevelAndRank = [&](int32_t a, int32_t b) {
-            return vertexLevel[a] < vertexLevel[b] || (vertexLevel[a] == vertexLevel[b] && a < b);
+            return vertexLevel[a] > vertexLevel[b] || (vertexLevel[a] == vertexLevel[b] && a < b);
         };
         std::sort(transitNodes.begin(), transitNodes.end(), compareByLevelAndRank);
         for (int i = 0; i < transitNodes.size(); ++i) {
