@@ -22,11 +22,6 @@
 
 class CTNRMetric {
 
-    struct IndexRange {
-        int32_t start = INVALID_INDEX;
-        int32_t end = INVALID_INDEX;
-    };
-
     class AccessNodeUnifier {
 
     public:
@@ -75,59 +70,7 @@ public:
 
     // Constructor
     CTNRMetric(const TransitNodeHierarchy &hierarchy, const CCH &cch, const int32_t *const inputWeights)
-            : hierarchy(hierarchy), cch(cch), cchMetric(cch, inputWeights)
-//            ,
-//              forwardRange(cch.getUpwardGraph().numVertices()), backwardRange(cch.getUpwardGraph().numVertices())
-    {
-
-        // Todo: remove debug
-//        // Find depth in elimination tree of every transit node
-//        std::vector<int> depth(hierarchy.numTransitNodes(), 0);
-//        const auto &parent = cch.getEliminationTree();
-//        for (const auto& n : hierarchy.getTransitNodes()) {
-//            int c = n;
-//            const auto idxN = hierarchy.getTransitNodeIndexOfRank(n);
-//            while (c != INVALID_INDEX) {
-//                c = parent[c];
-//                depth[idxN]++;
-//            }
-//        }
-//
-//        // Print average and max depth of transit nodes
-//        double avgDepth = 0.0;
-//        int maxDepth = 0;
-//        for (const auto& d : depth) {
-//            avgDepth += d;
-//            if (d > maxDepth) {
-//                maxDepth = d;
-//            }
-//        }
-//        avgDepth /= depth.size();
-//        std::cout << "CTNR: Average elimination tree depth of transit nodes: " << avgDepth << std::endl;
-//        std::cout << "CTNR: Maximum elimination tree depth of transit nodes: " << maxDepth << std::endl;
-
-
-//        const auto& upGraph = cch.getUpwardGraph();
-//        std::vector<int> cchLevel(upGraph.numVertices(), 0);
-//        cch.forEachVertexBottomUp([&](int32_t v) {
-//            const int levelV = cchLevel[v];
-//            FORALL_INCIDENT_EDGES(upGraph, v, e) {
-//                const int neighbor = upGraph.edgeHead(e);
-//                if (levelV + 1 > cchLevel[neighbor]) {
-//                    cchLevel[neighbor] = levelV + 1;
-//                }
-//            }
-//        });
-//        // Count number of vertices in each CCH level and print
-//        std::map<int, size_t> levelCounts;
-//        for (const auto &level: cchLevel) {
-//            ++levelCounts[level];
-//        }
-//        for (const auto& [level, count] : levelCounts) {
-//            std::cout << "CCH Level " << level << ": " << count << " vertices" << std::endl;
-//        }
-
-    }
+            : hierarchy(hierarchy), cch(cch), cchMetric(cch, inputWeights) {}
 
     // Customization phase
     void customize(CTNRData &data) {
@@ -193,18 +136,12 @@ private:
 
         // Count the actual number of access nodes per vertex in data.forwardPos/data.backwardPos. Later, a prefix sum
         // in these vectors will give actual offsets into flat representation without gaps.
-        data.forwardPos.clear();
-        data.backwardPos.clear();
-        data.forwardPos.resize(numVertices + 1, INVALID_INDEX);
-        data.backwardPos.resize(numVertices + 1, INVALID_INDEX);
-        data.forwardAccess.clear();
-        data.backwardAccess.clear();
-        data.forwardAccess.resize(forwardSum, CTNRData::AccessNode());
-        data.backwardAccess.resize(backwardSum, CTNRData::AccessNode());
+        data.forwardPos.resize(numVertices + 1);
+        data.backwardPos.resize(numVertices + 1);
+        data.forwardAccess.resize(forwardSum);
+        data.backwardAccess.resize(backwardSum);
 
         // Collect ranges of access nodes into these temporary vectors first with arbitrary order of vertices.
-//        const auto &upGraph = minCH.upwardGraph();
-//        const auto &downGraph = minCH.downwardGraph();
 
 #pragma omp parallel
 #pragma omp single nowait
@@ -325,22 +262,6 @@ private:
         for (int i = offset[idx]; i < end; ++i) {
             bool dominated = false;
             for (int j = offset[idx]; j < endOfNonDominated; ++j) {
-                // TODO: These accesses to the distance table are all over the place, leading to about 20% of all cache
-                //  misses during customization. We could reduce this by not using the actual distance table here but
-                //  an optimized version instead. We can base this on the fact that these queries always have node j
-                //  lower than node i, so we only care about upward/reverse downward distances between transit nodes
-                //  here. Moreover, node i is always on the elim-tree branch of node j.
-                //  Data structure: for each transit node, store upward distances to all higher transit nodes on its
-                //  elim-tree branch, indexed by the depth on the branch from the root (root has 0). This depth is
-                //  constant for every transit node so we can store it once.
-                //  Let depth[t] be the depth of transit node t on its elim-tree branch.
-                //  Let Dj[d] be the upward distance from transit node j to the transit node at depth d on j's elim-tree
-                //  branch.
-                //  Then, dTransit[j, i] = Dj[depth[i]].
-                //  Can be done analogously but separately for reverse downward distances.
-                //  Memory overhead should be okay since the elim-tree branch up to a transit node is short.
-                //  This only improves cache behavior if we iterate over j (the lower node) in the outer loop and i
-                //  (the higher node) in the inner loop. Though that should not be a problem (hopefully).
                 KASSERT(dataAccess[j].nodeIndex < dataAccess[i].nodeIndex);
                 const int dTransit = forward ?
                                data.getDistanceBetweenTransitNodes(dataAccess[j].nodeIndex, dataAccess[i].nodeIndex) :
@@ -456,7 +377,6 @@ private:
         std::vector<int> children;
         convertInTreeToOutTree(cch.getEliminationTree(), firstChild, children);
 
-//        const auto& upGraph = cch.getUpwardGraph();
         KASSERT(outCounts.size() == upGraph.numVertices() + 1);
 
         const int root = upGraph.numVertices() - 1;
@@ -504,10 +424,4 @@ private:
     const CCH &cch;
     CCHMetric cchMetric;
     CH minCH;
-
-    // Temporary data used during access node computation
-//    std::vector<IndexRange> forwardRange;
-//    std::vector<IndexRange> backwardRange;
-//    std::vector<CTNRData::AccessNode> forwardAccessTemp;
-//    std::vector<CTNRData::AccessNode> backwardAccessTemp;
 };
