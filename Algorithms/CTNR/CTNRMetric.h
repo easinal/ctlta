@@ -127,6 +127,8 @@ public:
 //            std::cout << "CCH Level " << level << ": " << count << " vertices" << std::endl;
 //        }
 
+        // Compute elimination tree in out format for DFS traversals
+        convertInTreeToOutTree(cch.getEliminationTree(), elimTreeFirstChild, elimTreeChildren);
     }
 
     // Customization phase
@@ -166,6 +168,10 @@ private:
 
         int numVertices = cch.getUpwardGraph().numVertices();
 
+        // Compute partial distance table for better accesses to upward/downward distances between transit nodes during
+        // pruning
+        computeUpAndDownTransitDistances(data);
+
         // Compute upper bound on number of forward/backward access nodes per vertex
         const auto rankToIdx = [&](const int r) {
             return data.rankToIdx(r);
@@ -193,18 +199,12 @@ private:
 
         // Count the actual number of access nodes per vertex in data.forwardPos/data.backwardPos. Later, a prefix sum
         // in these vectors will give actual offsets into flat representation without gaps.
-        data.forwardPos.clear();
-        data.backwardPos.clear();
-        data.forwardPos.resize(numVertices + 1, INVALID_INDEX);
-        data.backwardPos.resize(numVertices + 1, INVALID_INDEX);
-        data.forwardAccess.clear();
-        data.backwardAccess.clear();
-        data.forwardAccess.resize(forwardSum, CTNRData::AccessNode());
-        data.backwardAccess.resize(backwardSum, CTNRData::AccessNode());
+        data.forwardPos.resize(numVertices + 1);
+        data.backwardPos.resize(numVertices + 1);
+        data.forwardAccess.resize(forwardSum);
+        data.backwardAccess.resize(backwardSum);
 
         // Collect ranges of access nodes into these temporary vectors first with arbitrary order of vertices.
-//        const auto &upGraph = minCH.upwardGraph();
-//        const auto &downGraph = minCH.downwardGraph();
 
 #pragma omp parallel
 #pragma omp single nowait
@@ -226,8 +226,8 @@ private:
                                             data.backwardAccess, unifier);
 
                 // Prune access nodes based on domination between each other
-                pruneAccessNodesForVertex<true>(idx, maxNumForward, data.forwardPos, data.forwardAccess, data);
-                pruneAccessNodesForVertex<false>(idx, maxNumBackward, data.backwardPos, data.backwardAccess, data);
+                pruneAccessNodesForVertex<true>(idx, maxNumForward, data.forwardPos, data.forwardAccess);
+                pruneAccessNodesForVertex<false>(idx, maxNumBackward, data.backwardPos, data.backwardAccess);
             }
         });
 
@@ -318,45 +318,47 @@ private:
     [[gnu::noinline]] void pruneAccessNodesForVertex(const int idx,
                                                      const std::vector<int32_t> &offset,
                                                      std::vector<int32_t> &dataPos,
-                                                     std::vector<CTNRData::AccessNode> &dataAccess,
-                                                     CTNRData &data) const {
-        int endOfNonDominated = offset[idx];
-        int end = offset[idx] + dataPos[idx];
-        for (int i = offset[idx]; i < end; ++i) {
-            bool dominated = false;
-            for (int j = offset[idx]; j < endOfNonDominated; ++j) {
-                // TODO: These accesses to the distance table are all over the place, leading to about 20% of all cache
-                //  misses during customization. We could reduce this by not using the actual distance table here but
-                //  an optimized version instead. We can base this on the fact that these queries always have node j
-                //  lower than node i, so we only care about upward/reverse downward distances between transit nodes
-                //  here. Moreover, node i is always on the elim-tree branch of node j.
-                //  Data structure: for each transit node, store upward distances to all higher transit nodes on its
-                //  elim-tree branch, indexed by the depth on the branch from the root (root has 0). This depth is
-                //  constant for every transit node so we can store it once.
-                //  Let depth[t] be the depth of transit node t on its elim-tree branch.
-                //  Let Dj[d] be the upward distance from transit node j to the transit node at depth d on j's elim-tree
-                //  branch.
-                //  Then, dTransit[j, i] = Dj[depth[i]].
-                //  Can be done analogously but separately for reverse downward distances.
-                //  Memory overhead should be okay since the elim-tree branch up to a transit node is short.
-                //  This only improves cache behavior if we iterate over j (the lower node) in the outer loop and i
-                //  (the higher node) in the inner loop. Though that should not be a problem (hopefully).
-                KASSERT(dataAccess[j].nodeIndex < dataAccess[i].nodeIndex);
-                const int dTransit = forward ?
-                               data.getDistanceBetweenTransitNodes(dataAccess[j].nodeIndex, dataAccess[i].nodeIndex) :
-                               data.getDistanceBetweenTransitNodes(dataAccess[i].nodeIndex, dataAccess[j].nodeIndex);
+                                                     std::vector<CTNRData::AccessNode> &dataAccess) const {
+
+        int& num = dataPos[idx];
+        std::vector<bool> isDominated(num, false);
+
+        const int start = offset[idx];
+        KASSERT(std::is_sorted(dataAccess.begin() + start, dataAccess.begin() + start + num,
+                               [&](const CTNRData::AccessNode &a, const CTNRData::AccessNode &b) {
+                                   const int depthA = transitDistPos[a.nodeIndex + 1] - transitDistPos[a.nodeIndex];
+                                   const int depthB = transitDistPos[b.nodeIndex + 1] - transitDistPos[b.nodeIndex];
+                                   return depthA > depthB;
+                               }));
+
+        int endOfNonDominated = start;
+        int end = start + num;
+        for (int j = start; j < end; ++j) {
+            if (isDominated[j - start])
+                continue;
+            const int nodeJ = dataAccess[j].nodeIndex;
+            const int distJ = dataAccess[j].distance;
+            const int transitDistStartJ = transitDistPos[nodeJ];
+            int prevDepthI = -1;
+            for (int i = end - 1; i > j; --i) {
+                if (isDominated[i - start])
+                    continue;
+                const int nodeI = dataAccess[i].nodeIndex;
+                KASSERT(nodeJ < nodeI);
+                const int depthI = transitDistPos[nodeI + 1] - transitDistPos[nodeI];
+                KASSERT(depthI > prevDepthI);
+                const int dTransit = forward? upTransitDist[transitDistStartJ + depthI] : downTransitDist[transitDistStartJ + depthI];
                 KASSERT(dTransit != INFTY);
-                if (dataAccess[j].distance + dTransit <= dataAccess[i].distance) {
-                    dominated = true;
-                    break;
+                if (distJ + dTransit <= dataAccess[i].distance) {
+                    isDominated[i - start] = true;
                 }
+                prevDepthI = depthI;
+                unused(prevDepthI);
             }
-            if (!dominated) {
-                dataAccess[endOfNonDominated] = dataAccess[i];
-                ++endOfNonDominated;
-            }
+            dataAccess[endOfNonDominated] = dataAccess[j];
+            ++endOfNonDominated;
         }
-        dataPos[idx] = endOfNonDominated - offset[idx];
+        num = endOfNonDominated - start;
     }
 
 //TODO: use PHAST to accelerate distance table computation
@@ -419,6 +421,8 @@ private:
         for (auto v = numVertices - 1; v > 0; --v)
             firstChild[v] = firstChild[v - 1];
         firstChild[0] = 0;
+
+        KASSERT(std::is_sorted(firstChild.begin(), firstChild.end()));
     }
 
     // Run a DFS for the given tree in out format.
@@ -428,9 +432,10 @@ private:
     static void dfsOnTree(
             const std::vector<int> &firstChild,
             const std::vector<int> &children,
-            RecurseCallBack recurse,
-            BacktrackCallBack backtrack) {
+            const RecurseCallBack& recurse,
+            const BacktrackCallBack& backtrack) {
         const int numVertices = static_cast<int>(firstChild.size()) - 1;
+
         std::stack<ActiveVertex, std::vector<ActiveVertex>> activeVertices;
         activeVertices.emplace(numVertices - 1, firstChild[numVertices - 1]); // add root
         while (!activeVertices.empty()) {
@@ -443,8 +448,10 @@ private:
             }
             // Advance to next child
             const auto child = children[v.nextUnexploredEdge];
-            recurse(v.id, child);
+            const bool pruneAtChild = recurse(v.id, child);
             ++v.nextUnexploredEdge; // When backtracking from child later, look at next sibling
+            if (pruneAtChild)
+                continue;
             activeVertices.emplace(child, firstChild[child]);
         }
     }
@@ -452,11 +459,7 @@ private:
     template<typename GraphT, typename RankToIdxT>
     void countTransitNodesInSearchSpace(std::vector<int32_t> &outCounts, const GraphT &upGraph,
                                         const RankToIdxT &rankToIdx) const {
-        std::vector<int> firstChild;
-        std::vector<int> children;
-        convertInTreeToOutTree(cch.getEliminationTree(), firstChild, children);
 
-//        const auto& upGraph = cch.getUpwardGraph();
         KASSERT(outCounts.size() == upGraph.numVertices() + 1);
 
         const int root = upGraph.numVertices() - 1;
@@ -471,7 +474,7 @@ private:
             numAdded.push(0);
             if (hierarchy.isTransitNode(child)) {
                 outCounts[rankToIdx(child)] = 1;
-                return;
+                return false; // do not prune
             }
             FORALL_INCIDENT_EDGES(upGraph, child, e) {
                 const int neighbor = upGraph.edgeHead(e);
@@ -485,6 +488,7 @@ private:
                 ++numAdded.top();
             }
             outCounts[rankToIdx(child)] = static_cast<int32_t>(active.size());
+            return false; // do not prune
         };
 
         const auto backtrack = [&](const int /*child*/, const int /*parent*/) {
@@ -496,18 +500,96 @@ private:
             numAdded.pop();
         };
 
-        dfsOnTree(firstChild, children, recurse, backtrack);
+        dfsOnTree(elimTreeFirstChild, elimTreeChildren, recurse, backtrack);
+    }
+
+    void computeElimTreeDepthOfTransitNodes(std::vector<int32_t>& depth) {
+
+        const int numVertices = cch.getUpwardGraph().numVertices();
+        depth[hierarchy.getTransitNodeIndexOfRank(numVertices - 1)] = 0; // root
+
+        int curDepth = 0;
+
+        const auto recurse = [&](const int /*parent*/, const int child) {
+            if (!hierarchy.isTransitNode(child))
+                return true; // prune
+            depth[hierarchy.getTransitNodeIndexOfRank(child)] = ++curDepth;
+//            ++curDepth;
+//            if (hierarchy.isTransitNode(child))
+//                depth[hierarchy.getTransitNodeIndexOfRank(child)] = curDepth;
+            return false;
+        };
+
+        const auto backtrack = [&](const int child, const int /*parent*/) {
+            unused(child);
+            KASSERT(hierarchy.isTransitNode(child));
+            --curDepth;
+        };
+
+        dfsOnTree(elimTreeFirstChild, elimTreeChildren, recurse, backtrack);
+    }
+
+    void computeUpAndDownTransitDistances(const CTNRData& data) {
+        const int n = hierarchy.numTransitNodes();
+        transitDistPos.resize(n + 1, 0);
+
+        // Depths of transit nodes in elimination tree
+        computeElimTreeDepthOfTransitNodes(transitDistPos);
+
+        // Prefix sum to get offsets
+        int32_t sum = 0;
+        for (int32_t i = 0; i < n; ++i) {
+            const int32_t d = transitDistPos[i];
+            transitDistPos[i] = sum;
+            sum += d;
+        }
+        transitDistPos[n] = sum;
+        upTransitDist.resize(sum, INFTY);
+        downTransitDist.resize(sum, INFTY);
+
+        // fill upTransitDist and downTransitDist with distances to upper transit nodes on elim-tree branch
+        // using DFS
+        std::vector<int> onBranch; // stack of transit node indices on current elim-tree branch
+        const int numVertices = cch.getUpwardGraph().numVertices();
+        if (hierarchy.isTransitNode(numVertices - 1)) {
+            onBranch.push_back(hierarchy.getTransitNodeIndexOfRank(numVertices - 1));
+            KASSERT(transitDistPos[onBranch.back() + 1] - transitDistPos[onBranch.back()] == 0);
+        }
+        const auto recurse = [&](const int /*parent*/, const int child) {
+            if (!hierarchy.isTransitNode(child))
+                return true; // prune
+            const int idxChild = hierarchy.getTransitNodeIndexOfRank(child);
+            KASSERT(transitDistPos[idxChild + 1] - transitDistPos[idxChild] == static_cast<int>(onBranch.size()));
+            const int start = transitDistPos[idxChild];
+            for (auto u = 0; u < onBranch.size(); ++u) {
+                KASSERT(onBranch[u] > idxChild);
+                upTransitDist[start + u] = data.getDistanceBetweenTransitNodes(idxChild, onBranch[u]);
+                downTransitDist[start + u] = data.getDistanceBetweenTransitNodes(onBranch[u], idxChild);
+            }
+            onBranch.push_back(idxChild);
+            return false; // do not prune
+        };
+
+        const auto backtrack = [&](const int child, const int /*parent*/) {
+            unused(child);
+            KASSERT(hierarchy.isTransitNode(child));
+            onBranch.pop_back();
+        };
+
+        dfsOnTree(elimTreeFirstChild, elimTreeChildren, recurse, backtrack);
     }
 
 
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
+    std::vector<int> elimTreeFirstChild;
+    std::vector<int> elimTreeChildren;
+
     CCHMetric cchMetric;
     CH minCH;
 
-    // Temporary data used during access node computation
-//    std::vector<IndexRange> forwardRange;
-//    std::vector<IndexRange> backwardRange;
-//    std::vector<CTNRData::AccessNode> forwardAccessTemp;
-//    std::vector<CTNRData::AccessNode> backwardAccessTemp;
+    std::vector<int32_t> transitDistPos;
+    std::vector<int32_t> upTransitDist;
+    std::vector<int32_t> downTransitDist;
+
 };
