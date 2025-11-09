@@ -105,6 +105,16 @@ class CH {
     return ranks[v];
   }
 
+  // Get contraction order permutation.
+    const Permutation& getOrderPermutation() const noexcept {
+    return order;
+    }
+
+    // Get ranks permutation.
+    const Permutation& getRanksPermutation() const noexcept {
+    return ranks;
+    }
+
   // Reads the CH from the specified binary file.
   void readFrom(std::ifstream& in) {
     upGraph.readFrom(in);

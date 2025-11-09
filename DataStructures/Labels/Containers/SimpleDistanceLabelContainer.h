@@ -31,11 +31,17 @@ class SimpleDistanceLabelContainer {
     std::fill(distanceLabels.begin(), distanceLabels.end(), INFTY);
   }
 
-  // Returns a reference to the distance label of vertex v.
-  DistanceLabelT& operator[](const int v) {
-    assert(v >= 0); assert(v < distanceLabels.size());
-    return distanceLabels[v];
-  }
+    // Returns a reference to the distance label of vertex v.
+    DistanceLabelT& operator[](const int v) {
+      assert(v >= 0); assert(v < distanceLabels.size());
+      return distanceLabels[v];
+    }
+
+    // Returns a reference to the distance label of vertex v.
+    const DistanceLabelT& operator[](const int v) const {
+      assert(v >= 0); assert(v < distanceLabels.size());
+      return distanceLabels[v];
+    }
 
   uint64_t sizeInBytes() const {
     return sizeof(SimpleDistanceLabelContainer) + distanceLabels.size() * sizeof(DistanceLabelT);

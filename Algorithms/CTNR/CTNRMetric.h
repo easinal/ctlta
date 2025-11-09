@@ -70,17 +70,24 @@ public:
 
     // Constructor
     CTNRMetric(const TransitNodeHierarchy &hierarchy, const CCH &cch, const int32_t *const inputWeights)
-            : hierarchy(hierarchy), cch(cch), cchMetric(cch, inputWeights) {}
+            : hierarchy(hierarchy), cch(cch), cchMetric(cch, inputWeights), localEliminationTree(cch.getEliminationTree()) {
+
+        // Build local elimination tree
+        for (int & v : localEliminationTree) {
+            if (v != INVALID_VERTEX && hierarchy.isTransitNode(v))
+                v = INVALID_VERTEX;
+        }
+    }
 
     // Customization phase
     void customize(CTNRData &data) {
-        int64_t dummy1, dummy2, dummy3;
-        customizeWithMeasurements(data, dummy1, dummy2, dummy3);
+        int64_t dummy;
+        customizeWithMeasurements(data, dummy, dummy, dummy, dummy);
     }
 
     // Sets measurement parameters to times for each step in microseconds.
     void customizeWithMeasurements(CTNRData &data, int64_t &cchCustomizationTime, int64_t &accessNodeComputationTime,
-                                   int64_t &distanceTableComputationTime) {
+                                   int64_t &distanceTableComputationTime , int64_t &buildLocalMinCHTime) {
         Timer timer;
         minCH = cchMetric.buildMinimumWeightedCH();
         cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
@@ -90,9 +97,16 @@ public:
         timer.restart();
         computeAccessNodes(data);
         accessNodeComputationTime = timer.elapsed<std::chrono::microseconds>();
+        timer.restart();
+        localMinCH = buildLocalMinCH();
+        buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
     }
 
     const CH &getMinCH() const { return minCH; }
+
+    const CH &getLocalMinCH() const { return localMinCH; }
+
+    const std::vector<int32_t> &getLocalEliminationTree() const { return localEliminationTree; }
 
     // Memory usage calculation including node levels
     uint64_t sizeInBytes() const {
@@ -421,9 +435,29 @@ private:
         dfsOnTree(firstChild, children, recurse, backtrack);
     }
 
+    // Construct subgraph CH restricted to vertices below transit nodes, which is enough for local queries.
+    CH buildLocalMinCH() const {
+        CH::SearchGraph subUpGraph = minCH.upwardGraph();
+        CH::SearchGraph subDownGraph = minCH.downwardGraph();
+        const auto eraseEdgeToTransitNode = [&](const int, const int v) {
+            return hierarchy.isTransitNode(v);
+        };
+        subUpGraph.eraseEdges(eraseEdgeToTransitNode);
+        subDownGraph.eraseEdges(eraseEdgeToTransitNode);
+        KASSERT(subUpGraph.isDefrag() && subUpGraph.validate());
+        KASSERT(subDownGraph.isDefrag() && subDownGraph.validate());
+        return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(), minCH.getRanksPermutation()};
+    }
+
 
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
     CCHMetric cchMetric;
     CH minCH;
+
+    // Minimum CH restricted to non-transit nodes for local queries.
+    CH localMinCH;
+
+    // Elimination tree of the CCH restricted to non-transit nodes for local queries.
+    std::vector<int32_t> localEliminationTree;
 };

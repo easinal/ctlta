@@ -123,6 +123,7 @@ inline void runQueries(AlgoT &algo, const std::string &demand, std::ofstream &ou
     const auto hasRanks = demandFile.has_column("dijkstra_rank");
     if (hasRanks) out << "dijkstra_rank,";
     writeHeaderLine(out, algo);
+    int count = 0;
     while (demandFile.read_row(src, dst, rank)) {
         src = translate(src);
         dst = translate(dst);
@@ -135,6 +136,7 @@ inline void runQueries(AlgoT &algo, const std::string &demand, std::ofstream &ou
             out.seekp(-1, std::ios_base::cur); // overwrite newline
             out << ',' << algo.getLastMode() << '\n';
         }
+        ++count;
     }
 }
 
@@ -365,7 +367,7 @@ inline void runQueries(const CommandLineParser &clp) {
         // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
 
         // Use generic runQueries with CTNRQuery; pass CCH rank IDs to the algo
-        CTNRQuery<InputGraph> algo(hierarchy, data, cch, metric.getMinCH());
+        CTNRQuery<InputGraph> algo(hierarchy, data, metric.getLocalEliminationTree(), metric.getLocalMinCH());
         runQueries(algo, demandFileName, outputFile, [&](const int v) { return cch.getRanks()[v]; });
 
     } else {
@@ -649,15 +651,15 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
 
-        outputFile << "cch_customization,access_node_computation,distance_table_computation,total_time\n";
-        int64_t cchCustom, accessNodeComp, distTableComp, tot;
+        outputFile << "cch_customization,access_node_computation,distance_table_computation,local_min_ch_construction,total_time\n";
+        int64_t cchCustom, accessNodeComp, distTableComp, buildLocalMinCH, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
             CTNRMetric metric(hierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
             timer.restart();
-            metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp);
+            metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp, buildLocalMinCH);
             tot = timer.elapsed<std::chrono::microseconds>();
-            outputFile << cchCustom << ',' << accessNodeComp << ',' << distTableComp << ',' << tot << '\n';
+            outputFile << cchCustom << ',' << accessNodeComp << ',' << distTableComp << ',' << buildLocalMinCH << ',' << tot << '\n';
         }
     } else if (algorithmName == "CTL-custom") {
 

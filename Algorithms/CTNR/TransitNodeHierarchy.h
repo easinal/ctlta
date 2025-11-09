@@ -72,15 +72,17 @@ public:
     // in the separator hierarchy.
     int32_t getLevelOfLowestCommonAncestor(const int32_t &s, const int32_t &t) const {
 
+        const int minInputLevel = std::min(getVertexLevel(s), getVertexLevel(t));
+
         // XOR packed side IDs to find out lowest common level in separator hierarchy.
         const int l = lowestOneBit(packedSideIds[s] ^ packedSideIds[t]);
 
         if (l >= 0)
-            return l;
+            return std::min(l, minInputLevel);
 
         // If packed side IDs of s and t are exactly the same, the branch of s subsumes the branch of t or vice
         // versa. In this case, the lowest common ancestor is the lower one of the two vertices.
-        return std::min(getVertexLevel(s), getVertexLevel(t));
+        return minInputLevel;
     }
 
     int32_t numTransitNodes() const {

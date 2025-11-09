@@ -15,24 +15,26 @@ public:
     using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
 
     // Constructor
-    CTNRQuery(const TransitNodeHierarchy &hierarchy, CTNRData &data, const CCH &cch,
-              const CH &minimumWeightedCH)
+    CTNRQuery(const TransitNodeHierarchy &hierarchy, CTNRData &data,
+              const std::vector<int>& localEliminationTree,
+              const CH &localMinimumWeightedCH)
             : hierarchy(hierarchy),
               data(data),
-              ETquery(minimumWeightedCH, cch.getEliminationTree()) {}
+              localQuery(localMinimumWeightedCH, localEliminationTree) {}
 
     // Main query method (s, t are rank IDs)
     int32_t run(int32_t s, int32_t t) {
         const auto lcaLevel = hierarchy.getLevelOfLowestCommonAncestor(s, t);
+        int32_t dist = runTransitNodeQuery(s, t);
         if (lcaLevel >= hierarchy.getTransitNodeThreshold()) {
             lastModeIsLocal = true;
-            return localQuery(s, t);
+            dist = std::min(dist, runLocalQuery(s, t));
         } else {
             lastModeIsLocal = false;
-            const int32_t tnDist = transitNodeQuery(s, t);
-//            KASSERT(tnDist == localQuery(s,t));
-            return tnDist;
         }
+
+        lastDistance = dist;
+        return dist;
     }
 
     int32_t getDistance() const { return lastDistance; }
@@ -45,18 +47,16 @@ private:
     int32_t lastDistance = INFTY;
     bool lastModeIsLocal = true;
 
-    EliminationTreeQuery<LabelSet> ETquery;
+    EliminationTreeQuery<LabelSet> localQuery;
 
     // Local query using elimination tree
-    int32_t localQuery(int32_t s, int32_t t) {
-        //TODO: use distance bound from transit node query
-        ETquery.run(s, t);
-        lastDistance = ETquery.getDistance();
-        return lastDistance;
+    int32_t runLocalQuery(int32_t s, int32_t t) {
+        localQuery.run(s, t);
+        return localQuery.getDistance();
     }
 
     // Transit node query using three-hop approach
-    int32_t transitNodeQuery(const int32_t s, const int32_t t) {
+    int32_t runTransitNodeQuery(const int32_t s, const int32_t t) {
         int32_t minDist = INFTY;
 
         // Access arrays are indexed by rank IDs
@@ -73,7 +73,6 @@ private:
                     minDist = total;
             }
         }
-        lastDistance = minDist;
         return minDist;
     }
 };
