@@ -24,3 +24,14 @@ constexpr int MIN_ALIGNMENT = 16;
 #else
 constexpr int MIN_ALIGNMENT = 1;
 #endif
+
+
+// Hints to the compiler to not inline a function in debug builds.
+#ifdef __GNUC__ // GNU compiler.
+#if NOINLINE_TOGGLE // Specified by build system dependently on debug/release build.
+# define DEBUG_NOINLINE [[gnu::noinline]]
+#endif
+#endif
+#ifndef DEBUG_NOINLINE  // Default definition.
+# define DEBUG_NOINLINE
+#endif

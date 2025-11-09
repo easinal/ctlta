@@ -66,6 +66,7 @@ target_compile_definitions(RunP2PAlgo PRIVATE CTL_THETA=${VAL_CTL_THETA})
 target_compile_definitions(RunP2PAlgo PRIVATE CTL_SIMD_LOGK=${VAL_CTL_SIMD_LOGK})
 target_compile_definitions(RunP2PAlgo PRIVATE CTL_USE_PERFECT_CUSTOMIZATION=${VAL_CTL_USE_PERFECT_CUSTOMIZATION})
 #target_compile_definitions(RunP2PAlgo PRIVATE CTL_STORE_PATH_POINTERS=${VAL_CTL_STORE_PATH_POINTERS})
+target_compile_definitions(RunP2PAlgo PRIVATE NOINLINE_TOGGLE=${NOINLINE_TOGGLE})
 
 if((NUM_THREADS GREATER 1) AND OpenMP_FOUND)
   message("Linking openmp to RunP2PAlgo target.")

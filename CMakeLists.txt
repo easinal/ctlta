@@ -28,12 +28,15 @@ if(DISABLE_AVX)
   endif()
 endif()
 
-# Include frame pointer information for better stack traces.
+# Include frame pointer information and avoid inlining for tagged functions in debug builds for better stack traces.
+set(NOINLINE_TOGGLE "false")
 if(CMAKE_CXX_COMPILER_ID MATCHES GNU|Clang)
   if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
+      set(NOINLINE_TOGGLE "true")
   endif()
 endif()
+
 
 # Request warnings.
 if (CMAKE_CXX_COMPILER_ID MATCHES GNU)

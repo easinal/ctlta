@@ -250,13 +250,13 @@ private:
         unifier.flushAccessNodes(startOfRange);
     }
 
-    // Do not inline
     template<bool forward>
-    [[gnu::noinline]] void pruneAccessNodesForVertex(const int idx,
-                                                     const std::vector<int32_t> &offset,
-                                                     std::vector<int32_t> &dataPos,
-                                                     std::vector<CTNRData::AccessNode> &dataAccess,
-                                                     CTNRData &data) const {
+    DEBUG_NOINLINE
+    void pruneAccessNodesForVertex(const int idx,
+                                   const std::vector<int32_t> &offset,
+                                   std::vector<int32_t> &dataPos,
+                                   std::vector<CTNRData::AccessNode> &dataAccess,
+                                   CTNRData &data) const {
         int endOfNonDominated = offset[idx];
         int end = offset[idx] + dataPos[idx];
         for (int i = offset[idx]; i < end; ++i) {
@@ -264,8 +264,10 @@ private:
             for (int j = offset[idx]; j < endOfNonDominated; ++j) {
                 KASSERT(dataAccess[j].nodeIndex < dataAccess[i].nodeIndex);
                 const int dTransit = forward ?
-                               data.getDistanceBetweenTransitNodes(dataAccess[j].nodeIndex, dataAccess[i].nodeIndex) :
-                               data.getDistanceBetweenTransitNodes(dataAccess[i].nodeIndex, dataAccess[j].nodeIndex);
+                                     data.getDistanceBetweenTransitNodes(dataAccess[j].nodeIndex,
+                                                                         dataAccess[i].nodeIndex) :
+                                     data.getDistanceBetweenTransitNodes(dataAccess[i].nodeIndex,
+                                                                         dataAccess[j].nodeIndex);
                 KASSERT(dTransit != INFTY);
                 if (dataAccess[j].distance + dTransit <= dataAccess[i].distance) {
                     dominated = true;
