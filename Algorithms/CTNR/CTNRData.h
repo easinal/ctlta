@@ -12,11 +12,6 @@ class CTNRData {
 
 public:
 
-    struct AccessNode {
-        int32_t nodeIndex = INVALID_INDEX; // internal transit node index
-        int32_t distance = INFTY; // distance to/from access node
-    };
-
     explicit CTNRData(const int numTransitNodes, const int numVertices) :
     numTransitNodes(numTransitNodes),
     numVertices(numVertices),
@@ -27,12 +22,20 @@ public:
         return distanceTable[indexS * numTransitNodes + indexT];
     }
 
-    ConstantVectorRange<AccessNode> getForwardAccessNodes(const int v) const {
-        return {forwardAccess.begin() + forwardPos[rankToIdx(v)], forwardAccess.begin() + forwardPos[rankToIdx(v) + 1]};
+    ConstantVectorRange<int32_t> getForwardAccessNodes(const int v) const {
+        return {forwardNodes.begin() + forwardPos[rankToIdx(v)], forwardNodes.begin() + forwardPos[rankToIdx(v) + 1]};
     }
 
-    ConstantVectorRange<AccessNode> getBackwardAccessNodes(const int v) const {
-        return {backwardAccess.begin() + backwardPos[rankToIdx(v)], backwardAccess.begin() + backwardPos[rankToIdx(v) + 1]};
+    ConstantVectorRange<int32_t> getForwardDistances(const int v) const {
+        return {forwardDistances.begin() + forwardPos[rankToIdx(v)], forwardDistances.begin() + forwardPos[rankToIdx(v) + 1]};
+    }
+
+    ConstantVectorRange<int32_t> getBackwardAccessNodes(const int v) const {
+        return {backwardNodes.begin() + backwardPos[rankToIdx(v)], backwardNodes.begin() + backwardPos[rankToIdx(v) + 1]};
+    }
+
+    ConstantVectorRange<int32_t> getBackwardDistances(const int v) const {
+        return {backwardDistances.begin() + backwardPos[rankToIdx(v)], backwardDistances.begin() + backwardPos[rankToIdx(v) + 1]};
     }
 
     // Memory usage calculation including node levels
@@ -40,9 +43,11 @@ public:
         uint64_t size = sizeof(CTNRData);
 
         size += forwardPos.size() * sizeof(int32_t);
-        size += forwardAccess.size() * sizeof(AccessNode);
+        size += forwardNodes.size() * sizeof(int32_t);
+        size += forwardDistances.size() * sizeof(int32_t);
         size += backwardPos.size() * sizeof(int32_t);
-        size += backwardAccess.size() * sizeof(AccessNode);
+        size += backwardNodes.size() * sizeof(int32_t);
+        size += backwardDistances.size() * sizeof(int32_t);
         size += distanceTable.size() * sizeof(int32_t);
 
         return size;
@@ -72,11 +77,13 @@ private:
 
     // Range of forward access nodes for vertex v is stored in forwardAccess[forwardPos[v]..forwardPos[v+1]-1]
     std::vector<int32_t> forwardPos;
-    std::vector<AccessNode> forwardAccess;
+    std::vector<int32_t> forwardNodes;
+    std::vector<int32_t> forwardDistances;
 
     // Range of backward access nodes for vertex v is stored in backwardAccess[backwardPos[v]..backwardPos[v+1]-1]
     std::vector<int32_t> backwardPos;
-    std::vector<AccessNode> backwardAccess;
+    std::vector<int32_t> backwardNodes;
+    std::vector<int32_t> backwardDistances;
 
     // distanceTable[i * numTransitNodes + j] = distance from transit node i to transit node j, where i and j are
     // internal transit node indices.

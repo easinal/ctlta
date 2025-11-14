@@ -44,14 +44,15 @@ class CTNRMetric {
             }
         }
 
-        template<typename It>
-        void flushAccessNodes(It outRange) {
+        template<typename NodeIt, typename DistIt>
+        void flushAccessNodes(NodeIt outNodeRange, DistIt outDistRange) {
             std::sort(nodes.begin(), nodes.end());
             int next = 0;
             for (const int &node: nodes) {
                 int32_t &entry = distances[node];
-                CTNRData::AccessNode an(node, entry);
-                outRange[next++] = an;
+                outNodeRange[next] = node;
+                outDistRange[next] = entry;
+                ++next;
                 entry = INFTY; // reset for next use
             }
             nodes.clear();
@@ -155,8 +156,10 @@ private:
         // in these vectors will give actual offsets into flat representation without gaps.
         data.forwardPos.resize(numVertices + 1);
         data.backwardPos.resize(numVertices + 1);
-        data.forwardAccess.resize(forwardSum);
-        data.backwardAccess.resize(backwardSum);
+        data.forwardNodes.resize(forwardSum);
+        data.forwardDistances.resize(forwardSum);
+        data.backwardNodes.resize(backwardSum);
+        data.backwardDistances.resize(backwardSum);
 
         // Collect ranges of access nodes into these temporary vectors first with arbitrary order of vertices.
         // TODO: Debug for USA network
@@ -167,21 +170,23 @@ private:
             if (hierarchy.isTransitNode(rv)) {
                 KASSERT(maxNumForward[idx + 1] - maxNumForward[idx] >= 1);
                 KASSERT(maxNumBackward[idx + 1] - maxNumBackward[idx] >= 1);
-                data.forwardAccess[maxNumForward[idx]] = {hierarchy.getTransitNodeIndexOfRank(rv), 0};
+                data.forwardNodes[maxNumForward[idx]] = hierarchy.getTransitNodeIndexOfRank(rv);
+                data.forwardDistances[maxNumForward[idx]] = 0;
                 data.forwardPos[idx] = 1;
-                data.backwardAccess[maxNumBackward[idx]] = {hierarchy.getTransitNodeIndexOfRank(rv), 0};
+                data.backwardNodes[maxNumBackward[idx]] = hierarchy.getTransitNodeIndexOfRank(rv);
+                data.backwardDistances[maxNumBackward[idx]] = 0;
                 data.backwardPos[idx] = 1;
             } else {
                 // Compute access nodes by unifying access nodes of upward neighbors
                 AccessNodeUnifier unifier(hierarchy.numTransitNodes());
                 computeAccessNodesForVertex(rv, maxNumForward, minCH.upwardGraph(), rankToIdx, data.forwardPos,
-                                            data.forwardAccess, unifier);
+                                            data.forwardNodes, data.forwardDistances, unifier);
                 computeAccessNodesForVertex(rv, maxNumBackward, minCH.downwardGraph(), rankToIdx, data.backwardPos,
-                                            data.backwardAccess, unifier);
+                                            data.backwardNodes, data.backwardDistances, unifier);
 
                 // Prune access nodes based on domination between each other
-                pruneAccessNodesForVertex<true>(idx, maxNumForward, data.forwardPos, data.forwardAccess, data);
-                pruneAccessNodesForVertex<false>(idx, maxNumBackward, data.backwardPos, data.backwardAccess, data);
+                pruneAccessNodesForVertex<true>(idx, maxNumForward, data.forwardPos, data.forwardNodes, data.forwardDistances, data);
+                pruneAccessNodesForVertex<false>(idx, maxNumBackward, data.backwardPos, data.backwardNodes, data.backwardDistances, data);
             }
         });
 
@@ -203,34 +208,42 @@ private:
         // Move ranges to fill gaps
         for (int32_t i = 0; i < numVertices; ++i) {
             const int forwardCount = data.forwardPos[i + 1] - data.forwardPos[i];
-            std::copy(data.forwardAccess.begin() + maxNumForward[i],
-                      data.forwardAccess.begin() + maxNumForward[i] + forwardCount,
-                      data.forwardAccess.begin() + data.forwardPos[i]);
+            std::copy(data.forwardNodes.begin() + maxNumForward[i],
+                      data.forwardNodes.begin() + maxNumForward[i] + forwardCount,
+                      data.forwardNodes.begin() + data.forwardPos[i]);
+            std::copy(data.forwardDistances.begin() + maxNumForward[i],
+                      data.forwardDistances.begin() + maxNumForward[i] + forwardCount,
+                      data.forwardDistances.begin() + data.forwardPos[i]);
 
             const int backwardCount = data.backwardPos[i + 1] - data.backwardPos[i];
-            std::copy(data.backwardAccess.begin() + maxNumBackward[i],
-                      data.backwardAccess.begin() + maxNumBackward[i] + backwardCount,
-                      data.backwardAccess.begin() + data.backwardPos[i]);
+            std::copy(data.backwardNodes.begin() + maxNumBackward[i],
+                      data.backwardNodes.begin() + maxNumBackward[i] + backwardCount,
+                      data.backwardNodes.begin() + data.backwardPos[i]);
+            std::copy(data.backwardDistances.begin() + maxNumBackward[i],
+                      data.backwardDistances.begin() + maxNumBackward[i] + backwardCount,
+                      data.backwardDistances.begin() + data.backwardPos[i]);
 
-            KASSERT(std::is_sorted(data.forwardAccess.begin() + data.forwardPos[i],
-                                   data.forwardAccess.begin() + data.forwardPos[i + 1],
-                                   [&](const CTNRData::AccessNode &a, const CTNRData::AccessNode &b) {
-                                       return a.nodeIndex < b.nodeIndex;
+            KASSERT(std::is_sorted(data.forwardNodes.begin() + data.forwardPos[i],
+                                   data.forwardNodes.begin() + data.forwardPos[i + 1],
+                                   [&](const int32_t &a, const int32_t &b) {
+                                       return a < b;
                                    }));
-            KASSERT(std::is_sorted(data.backwardAccess.begin() + data.backwardPos[i],
-                                   data.backwardAccess.begin() + data.backwardPos[i + 1],
-                                   [&](const CTNRData::AccessNode &a, const CTNRData::AccessNode &b) {
-                                       return a.nodeIndex < b.nodeIndex;
+            KASSERT(std::is_sorted(data.backwardNodes.begin() + data.backwardPos[i],
+                                   data.backwardNodes.begin() + data.backwardPos[i + 1],
+                                   [&](const int32_t &a, const int32_t &b) {
+                                       return a < b;
                                    }));
         }
-        data.forwardAccess.resize(forwardSum);
-        data.backwardAccess.resize(backwardSum);
+        data.forwardNodes.resize(forwardSum);
+        data.forwardDistances.resize(forwardSum);
+        data.backwardNodes.resize(backwardSum);
+        data.backwardDistances.resize(backwardSum);
 
         // TODO: remove debug
         std::cout << "CTNR: Average forward access nodes per vertex: "
-                  << static_cast<double>(data.forwardAccess.size()) / numVertices << std::endl;
+                  << static_cast<double>(data.forwardNodes.size()) / numVertices << std::endl;
         std::cout << "CTNR: Average backward access nodes per vertex: "
-                  << static_cast<double>(data.backwardAccess.size()) / numVertices << std::endl;
+                  << static_cast<double>(data.backwardNodes.size()) / numVertices << std::endl;
 
         std::cout << "CTNR: Average forward upper bound in search space: "
                   << static_cast<double>(maxNumForward.back()) / numVertices << std::endl;
@@ -244,7 +257,8 @@ private:
                                      const CH::SearchGraph &graph,
                                      const RankToIdx &rankToIdx,
                                      std::vector<int32_t> &dataPos,
-                                     std::vector<CTNRData::AccessNode> &dataAccess,
+                                     std::vector<int32_t> &dataNodes,
+                                     std::vector<int32_t> &dataDistances,
                                      AccessNodeUnifier &unifier) const {
         const int idx = rankToIdx(rv);
         FORALL_INCIDENT_EDGES(graph, rv, e) {
@@ -255,16 +269,16 @@ private:
 
             const int end = offset[idxNeighbor] + dataPos[idxNeighbor];
             for (auto i = offset[idxNeighbor]; i < end; ++i) {
-                const auto &an = dataAccess[i];
-                const int dist = an.distance + w;
-                unifier.addAccessNode(an.nodeIndex, dist);
+                const int dist = dataDistances[i] + w;
+                unifier.addAccessNode(dataNodes[i], dist);
             }
         }
-        const auto startOfRange = dataAccess.begin() + offset[idx];
+        const auto startOfNodeRange = dataNodes.begin() + offset[idx];
+        const auto startOfDistRange = dataDistances.begin() + offset[idx];
         const int sizeOfRange = unifier.sizeOfUnion();
         KASSERT(sizeOfRange <= offset[idx + 1] - offset[idx]);
         dataPos[idx] = sizeOfRange;
-        unifier.flushAccessNodes(startOfRange);
+        unifier.flushAccessNodes(startOfNodeRange, startOfDistRange);
     }
 
     template<bool forward>
@@ -272,27 +286,28 @@ private:
     void pruneAccessNodesForVertex(const int idx,
                                    const std::vector<int32_t> &offset,
                                    std::vector<int32_t> &dataPos,
-                                   std::vector<CTNRData::AccessNode> &dataAccess,
+                                   std::vector<int32_t> &dataNodes,
+                                   std::vector<int32_t> &dataDistances,
                                    CTNRData &data) const {
         int endOfNonDominated = offset[idx];
         int end = offset[idx] + dataPos[idx];
         for (int i = offset[idx]; i < end; ++i) {
             bool dominated = false;
             for (int j = offset[idx]; j < endOfNonDominated; ++j) {
-                KASSERT(dataAccess[j].nodeIndex < dataAccess[i].nodeIndex);
+                KASSERT(dataNodes[j] < dataNodes[i]);
                 const int dTransit = forward ?
-                                     data.getDistanceBetweenTransitNodes(dataAccess[j].nodeIndex,
-                                                                         dataAccess[i].nodeIndex) :
-                                     data.getDistanceBetweenTransitNodes(dataAccess[i].nodeIndex,
-                                                                         dataAccess[j].nodeIndex);
+                                     data.getDistanceBetweenTransitNodes(dataNodes[j], dataNodes[i]) :
+                                     data.getDistanceBetweenTransitNodes(dataNodes[i],
+                                                                         dataNodes[j]);
                 KASSERT(dTransit != INFTY);
-                if (dataAccess[j].distance + dTransit <= dataAccess[i].distance) {
+                if (dataDistances[j] + dTransit <= dataDistances[i]) {
                     dominated = true;
                     break;
                 }
             }
             if (!dominated) {
-                dataAccess[endOfNonDominated] = dataAccess[i];
+                dataNodes[endOfNonDominated] = dataNodes[i];
+                dataDistances[endOfNonDominated] = dataDistances[i];
                 ++endOfNonDominated;
             }
         }

@@ -61,14 +61,23 @@ private:
 
         // Access arrays are indexed by rank IDs
         const auto &accessNodesS = data.getForwardAccessNodes(s);
+        const auto &accessDistancesS = data.getForwardDistances(s);
         const auto &accessNodesT = data.getBackwardAccessNodes(t);
+        const auto &accessDistancesT = data.getBackwardDistances(t);
 
-        for (const auto& as : accessNodesS) {
-            if (as.distance >= minDist) continue;
+        const auto numAccessS = accessNodesS.size();
+        const auto numAccessT = accessNodesT.size();
+        for (auto i = 0; i < numAccessS; ++i) {
+            const int32_t nodeS = accessNodesS[i];
+            const int32_t distS = accessDistancesS[i];
+            if (distS >= minDist) continue;
 
-            for (const auto& at : accessNodesT) {
-                const int32_t mid = data.getDistanceBetweenTransitNodes(as.nodeIndex, at.nodeIndex);
-                const int32_t total = as.distance + mid + at.distance;
+            for (auto j = 0; j < numAccessT; ++j) {
+                const int32_t nodeT = accessNodesT[j];
+                const int32_t distT = accessDistancesT[j];
+//                if (distS + distT >= minDist) continue;
+                const int32_t mid = data.getDistanceBetweenTransitNodes(nodeS, nodeT);
+                const int32_t total = distS + mid + distT;
                 if (total < minDist)
                     minDist = total;
             }
