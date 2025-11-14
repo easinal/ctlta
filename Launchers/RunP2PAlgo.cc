@@ -70,6 +70,7 @@ inline void printUsage() {
               "  -h <file>         weighted contraction hierarchy\n"
               "  -d <file>         file that contains OD pairs (queries)\n"
               "  -o <file>         place output in <file>\n"
+              "  -ctnr-thresh <num>  transit node level threshold (default: 5)\n"
               "  -help             display this help and exit\n";
 }
 
@@ -352,8 +353,9 @@ inline void runQueries(const CommandLineParser &clp) {
         CCH cch;
         cch.preprocess(graph, sepDecomp);
 
+        const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
         TransitNodeHierarchy hierarchy;
-        hierarchy.preprocess(graph, sepDecomp, 5); // first 5 levels are transit nodes
+        hierarchy.preprocess(graph, sepDecomp, levelThreshold); // first levelThreshold levels are transit nodes
 
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
@@ -637,13 +639,16 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# Separator: " << sepFileName << '\n';
 
+
+        const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
+
         Timer timer;
         // Build CCH and tree hierarchy
         CCH cch;
         cch.preprocess(graph, decomp);
 
         TransitNodeHierarchy hierarchy;
-        hierarchy.preprocess(graph, decomp, 5); // first 5 levels are transit nodes
+        hierarchy.preprocess(graph, decomp, levelThreshold); // first levelThreshold levels are transit nodes
 
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());

@@ -100,6 +100,9 @@ public:
         timer.restart();
         localMinCH = buildLocalMinCH();
         buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
+        std::cout << "Finished CTNR customization in " << (cchCustomizationTime + accessNodeComputationTime +
+                                              distanceTableComputationTime + buildLocalMinCHTime)
+                  << " microseconds." << std::endl;
     }
 
     const CH &getMinCH() const { return minCH; }
@@ -156,7 +159,7 @@ private:
         data.backwardAccess.resize(backwardSum);
 
         // Collect ranges of access nodes into these temporary vectors first with arbitrary order of vertices.
-
+        // TODO: Debug for USA network
 #pragma omp parallel
 #pragma omp single nowait
         cch.forEachVertexTopDown([&](int32_t rv) {
