@@ -81,8 +81,8 @@ public:
 
     // Customization phase
     void customize(CTNRData &data) {
-        int64_t dummy;
-        customizeWithMeasurements(data, dummy, dummy, dummy, dummy);
+        int64_t dummy1, dummy2, dummy3, dummy4;
+        customizeWithMeasurements(data, dummy1, dummy2, dummy3, dummy4);
     }
 
     // Sets measurement parameters to times for each step in microseconds.
