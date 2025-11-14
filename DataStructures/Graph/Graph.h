@@ -600,6 +600,51 @@ public:
         return subgraph;
     }
 
+    // Erase all edges that satisfy the given predicate. Number of vertices remains unchanged.
+    // Make sure graph is defragmented before calling this method.
+    template<typename EdgeErasePredicate>
+    void eraseEdges(const EdgeErasePredicate &predicate) {
+        KASSERT(isDefrag());
+
+        // Find new positions for all non-erased edges.
+        edgeCount = 0;
+        for (int u = 0; u < numVertices(); ++u) {
+            const int first = edgeCount; // The index of the first edge out of u.
+            for (int e = firstEdge(u); e < lastEdge(u); ++e) {
+                const int v = edgeHeads[e];
+                if (!predicate(u, v)) {
+                    KASSERT(edgeCount <= e);
+                    edgeHeads[edgeCount] = v;
+                    RUN_FORALL(EdgeAttributes::values[edgeCount] = EdgeAttributes::values[e]);
+                    ++edgeCount;
+                }
+            }
+            outEdges[u].first() = first;
+            if (dynamic)
+                outEdges[u].last() = edgeCount;
+        }
+        if (!dynamic)
+            outEdges.back().first() = edgeCount;
+
+        edgeHeads.resize(edgeCount);
+        RUN_FORALL(EdgeAttributes::values.resize(edgeCount));
+
+//        // Move all non-erased edges to their new positions in edgeHeads and EdgeAttributes.
+//        const auto moveEdges = [&](auto &container) {
+//            KASSERT(container.size() == oldToNewEdgePos.size());
+//            for (int e = 0; e < container.size(); ++e) {
+//                const int newPos = oldToNewEdgePos[e];
+//                if (newPos != -1) {
+//                    KASSERT(newPos <= e);
+//                    container[newPos] = std::move(container[e]);
+//                }
+//            }
+//            container.resize(edgeCount);
+//        };
+//        moveEdges(edgeHeads);
+//        RUN_FORALL(moveEdges(EdgeAttributes::values));
+    }
+
     // Reverses the graph.
     void reverse() {
         *this = getReverseGraph();

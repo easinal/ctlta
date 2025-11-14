@@ -79,17 +79,33 @@ public:
 
     // Runs an elimination tree query that computes multiple shortest paths simultaneously.
     void run(const std::array<int, K> &sources, const std::array<int, K> &targets) {
-        reverseSearch.distanceLabels[reverseSearch.searchGraph.numVertices() - 1] = INFTY;
         forwardSearch.init(sources);
         reverseSearch.init(targets);
         tentativeDistances = INFTY;
-        while (forwardSearch.nextVertices.minKey() != INVALID_VERTEX)
+        while (forwardSearch.nextVertices.minKey() != INVALID_VERTEX &&
+               reverseSearch.nextVertices.minKey() != INVALID_VERTEX) {
             if (forwardSearch.nextVertices.minKey() <= reverseSearch.nextVertices.minKey()) {
                 updateTentativeDistances(forwardSearch.nextVertices.minKey());
                 forwardSearch.distanceLabels[forwardSearch.settleNextVertex()] = INFTY;
             } else {
                 reverseSearch.distanceLabels[reverseSearch.settleNextVertex()] = INFTY;
             }
+        }
+
+        // Reset distance labels of rest of branches in case searches did not meet.
+        // This is only needed if the query is run on subgraphs of the CH and elimination tree.
+        // Otherwise, only the label of the root in the reverse search would remain to be reset.
+        //        reverseSearch.distanceLabels[reverseSearch.searchGraph.numVertices() - 1] = INFTY;
+        int v = forwardSearch.nextVertices.minKey();
+        while (v != INVALID_VERTEX) {
+            forwardSearch.distanceLabels[v] = INFTY;
+            v = forwardSearch.nextVertex();
+        }
+        v = reverseSearch.nextVertices.minKey();
+        while (v != INVALID_VERTEX) {
+            reverseSearch.distanceLabels[v] = INFTY;
+            v = reverseSearch.nextVertex();
+        }
     }
 
     // Runs a forward search from s and pins (stores) its distance labels.
@@ -150,6 +166,16 @@ private:
         const auto distances = forwardSearch.distanceLabels[v] + reverseSearch.distanceLabels[v];
         meetingVertices.setVertex(v, distances < tentativeDistances);
         tentativeDistances.min(distances);
+    }
+
+    template<typename Container>
+    static bool checkAllInfty(const Container &cont, const size_t size) {
+        for (int i = 0; i < size; ++i)
+            if (!allSet(cont[i] == INFTY)) {
+                KASSERT(false);
+                return false;
+            }
+        return true;
     }
 
     using UpwardSearch =
