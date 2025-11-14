@@ -5,6 +5,7 @@
 #include "DataStructures/Labels/BasicLabelSet.h"
 #include "DataStructures/Labels/ParentInfo.h"
 #include "Tools/Constants.h"
+#include "CTNRConstants.h"
 #include <memory>
 #include <algorithm>
 #include <climits>
@@ -41,13 +42,13 @@ public:
 
     const char *getLastMode() const { return lastModeIsLocal ? "local" : "transit"; }
 
-private:
-    const TransitNodeHierarchy &hierarchy;
-    const CTNRData &data;
-    int32_t lastDistance = INFTY;
-    bool lastModeIsLocal = true;
+    uint64_t sizeInBytes() const {
+        uint64_t size = sizeof(CTNRQuery);
+        size += localQuery.sizeInBytes();
+        return size;
+    }
 
-    EliminationTreeQuery<LabelSet> localQuery;
+private:
 
     // Local query using elimination tree
     int32_t runLocalQuery(int32_t s, int32_t t) {
@@ -57,12 +58,12 @@ private:
 
     // Transit node query using three-hop approach
     int32_t runTransitNodeQuery(const int32_t s, const int32_t t) {
-        int32_t minDist = INFTY;
+        int32_t minDist = CTNR_INFTY;
 
         // Access arrays are indexed by rank IDs
-        const auto &accessNodesS = data.getForwardAccessNodes(s);
+        const auto &accessNodesS = data.getAccessNodes(s);
         const auto &accessDistancesS = data.getForwardDistances(s);
-        const auto &accessNodesT = data.getBackwardAccessNodes(t);
+        const auto &accessNodesT = data.getAccessNodes(t);
         const auto &accessDistancesT = data.getBackwardDistances(t);
 
         const auto numAccessS = accessNodesS.size();
@@ -75,6 +76,7 @@ private:
             for (auto j = 0; j < numAccessT; ++j) {
                 const int32_t nodeT = accessNodesT[j];
                 const int32_t distT = accessDistancesT[j];
+//                if (distT >= CTNR_INFTY) continue;
 //                if (distS + distT >= minDist) continue;
                 const int32_t mid = data.getDistanceBetweenTransitNodes(nodeS, nodeT);
                 const int32_t total = distS + mid + distT;
@@ -84,5 +86,13 @@ private:
         }
         return minDist;
     }
+
+
+    const TransitNodeHierarchy &hierarchy;
+    const CTNRData &data;
+    int32_t lastDistance = CTNR_INFTY;
+    bool lastModeIsLocal = true;
+
+    EliminationTreeQuery<LabelSet> localQuery;
 };
 

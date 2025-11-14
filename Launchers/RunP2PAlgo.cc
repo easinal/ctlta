@@ -13,6 +13,7 @@
 #include "Algorithms/CTNR/CTNRData.h"
 #include "Algorithms/CTNR/CTNRMetric.h"
 #include "Algorithms/CTNR/CTNRQuery.h"
+#include "Algorithms/CTNR/CTNRPreprocessor.h"
 #include "Algorithms/CTL/BalancedTopologyCentricTreeHierarchy.h"
 #include "Algorithms/CTL/TruncatedTreeLabelling.h"
 #include "Algorithms/CTL/CTLMetric.h"
@@ -109,6 +110,11 @@ inline void writeRecordLine(std::ofstream &out, Dij &algo, const int dst, const 
     out << algo.getDistance(dst) << ',' << elapsed << '\n';
 }
 
+template<>
+inline void writeRecordLine(std::ofstream &out, CTNRQuery<InputGraph> &algo, const int, const int64_t elapsed) {
+    out << algo.getDistance() << ',' << elapsed << ',' << algo.getLastMode() << '\n';
+}
+
 // Runs the specified P2P algorithm on the given OD pairs.
 template<typename AlgoT, typename T>
 inline void runQueries(AlgoT &algo, const std::string &demand, std::ofstream &out, T translate) {
@@ -133,10 +139,6 @@ inline void runQueries(AlgoT &algo, const std::string &demand, std::ofstream &ou
         const auto elapsed = timer.elapsed<std::chrono::nanoseconds>();
         if (hasRanks) out << rank << ',';
         writeRecordLine(out, algo, dst, elapsed);
-        if constexpr (std::is_same_v<AlgoT, CTNRQuery<InputGraph>>) {
-            out.seekp(-1, std::ios_base::cur); // overwrite newline
-            out << ',' << algo.getLastMode() << '\n';
-        }
         ++count;
     }
 }
@@ -359,7 +361,11 @@ inline void runQueries(const CommandLineParser &clp) {
 
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
+        CTNRPreprocessor preprocessor(hierarchy, cch);
         CTNRMetric metric(hierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
+
+        // Preprocess CTNR
+        preprocessor.preprocess(data);
 
         // Customize CTNR
         metric.customize(data);
@@ -370,6 +376,16 @@ inline void runQueries(const CommandLineParser &clp) {
 
         // Use generic runQueries with CTNRQuery; pass CCH rank IDs to the algo
         CTNRQuery<InputGraph> algo(hierarchy, data, metric.getLocalEliminationTree(), metric.getLocalMinCH());
+
+        outputFile << "# Memory usage CCH: " << (cch.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage hierarchy: " << (hierarchy.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage distance table: " << (data.sizeDistanceTableInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage access nodes: " << (data.sizeAccessNodesInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage preprocessor: " << (preprocessor.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage query: " << (algo.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage total: " <<
+                   (cch.sizeInBytes() + hierarchy.sizeInBytes() + data.sizeInBytes() + preprocessor.sizeInBytes() + metric.sizeInBytes() +
+                    algo.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
         runQueries(algo, demandFileName, outputFile, [&](const int v) { return cch.getRanks()[v]; });
 
     } else {
@@ -652,6 +668,8 @@ inline void runPreprocessing(const CommandLineParser &clp) {
 
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
+        CTNRPreprocessor preprocessor(hierarchy, cch);
+        preprocessor.preprocess(data);
 
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
