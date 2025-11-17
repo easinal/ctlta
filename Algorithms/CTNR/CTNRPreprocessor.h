@@ -9,13 +9,14 @@ public:
             : hierarchy(hierarchy), cch(cch) {
         // Convert elimination tree to out-tree format
         convertInTreeToOutTree(cch.getEliminationTree(), elimTreeFirstChild, elimTreeChildren);
+    }
 
-
-
+    const std::vector<AccessNodeEdge>& getAccessNodeEdges() const {
+        return accessNodeEdges;
     }
 
     // Determines access nodes of each vertex and allocates distance entries.
-    void preprocess(CTNRData &data) const {
+    void preprocess(CTNRData &data) {
 
         int numVertices = cch.getUpwardGraph().numVertices();
 
@@ -57,6 +58,10 @@ public:
         data.backwardDistances.resize(sum);
 
         writeMetricIndependentAccessNodes(data.pos, data.accessNodes, cch.getUpwardGraph(), rankToIdx);
+
+        std::sort(accessNodeEdges.begin(), accessNodeEdges.end(), [](const AccessNodeEdge &a, const AccessNodeEdge &b) {
+            return a.edge < b.edge;
+        });
 
         // TODO: remove debug
         std::cout << "CTNR: Average access nodes per vertex: "
@@ -152,7 +157,7 @@ private:
 
         const int root = upGraph.numVertices() - 1;
         if (hierarchy.isTransitNode(root)) {
-            outCounts[rankToIdx(root)] = 1;
+            outCounts[rankToIdx(root)] = 0;
         }
 
         std::stack<int, std::vector<int>> numAdded;
@@ -161,7 +166,7 @@ private:
         const auto recurse = [&](const int /*parent*/, const int child) {
             numAdded.push(0);
             if (hierarchy.isTransitNode(child)) {
-                outCounts[rankToIdx(child)] = 1;
+                outCounts[rankToIdx(child)] = 0;
                 return;
             }
             FORALL_INCIDENT_EDGES(upGraph, child, e) {
@@ -193,23 +198,15 @@ private:
     template<typename GraphT, typename RankToIdxT>
     void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos, std::vector<int32_t> &entries,
                                            const GraphT &upGraph,
-                                           const RankToIdxT &rankToIdx) const {
+                                           const RankToIdxT &rankToIdx) {
 
         KASSERT(pos.size() == upGraph.numVertices() + 1);
         std::vector<int> curNumEntries(upGraph.numVertices(), 0);
 
-        const int root = upGraph.numVertices() - 1;
-        if (hierarchy.isTransitNode(root)) {
-            const int idx = rankToIdx(root);
-            entries[pos[idx]] = hierarchy.getTransitNodeIndexOfRank(root);
-            ++curNumEntries[idx];
-        }
-
         const auto recurse = [&](const int parent, const int child) {
             const int childIdx = rankToIdx(child);
+            const int startChild = pos[childIdx];
             if (hierarchy.isTransitNode(child)) {
-                entries[pos[childIdx]] = hierarchy.getTransitNodeIndexOfRank(child);
-                ++curNumEntries[childIdx];
                 return;
             }
 
@@ -218,7 +215,7 @@ private:
             KASSERT(curNumEntries[parentIdx] <= pos[parentIdx + 1] - pos[parentIdx] &&
                     curNumEntries[parentIdx] >= pos[parentIdx + 1] - pos[parentIdx] - CTNRData::K);
             for (int i = 0; i < curNumEntries[parentIdx]; ++i) {
-                entries[pos[childIdx] + i] = entries[pos[parentIdx] + i];
+                entries[startChild + i] = entries[pos[parentIdx] + i];
             }
             curNumEntries[childIdx] = curNumEntries[parentIdx];
 
@@ -228,14 +225,22 @@ private:
                 if (!hierarchy.isTransitNode(neighbor))
                     continue;
                 const int node = hierarchy.getTransitNodeIndexOfRank(neighbor);
-                if (contains(entries.begin() + pos[childIdx],
-                             entries.begin() + pos[childIdx] + curNumEntries[childIdx], node))
-                    continue;
-                entries[pos[childIdx] + curNumEntries[childIdx]] = node;
+                int i = 0;
+                for (; i < curNumEntries[childIdx]; ++i) {
+                    if (entries[startChild + i] == node) {
+                        break;
+                    }
+                }
+                // Mark access node edge:
+                accessNodeEdges.emplace_back(e, startChild + i);
+                if (i < curNumEntries[childIdx])
+                    continue; // Neighbor is already an access node
+                // New access node
+                entries[startChild + curNumEntries[childIdx]] = node;
                 ++curNumEntries[childIdx];
             }
-            KASSERT(curNumEntries[childIdx] <= pos[childIdx + 1] - pos[childIdx] &&
-                    curNumEntries[childIdx] >= pos[childIdx + 1] - pos[childIdx] - CTNRData::K);
+            KASSERT(curNumEntries[childIdx] <= pos[childIdx + 1] - startChild &&
+                    curNumEntries[childIdx] >= pos[childIdx + 1] - startChild - CTNRData::K);
         };
 
         const auto backtrack = [&](const int /*child*/, const int /*parent*/) {
@@ -281,5 +286,9 @@ private:
     // CCH elimination as out-tree
     std::vector<int> elimTreeFirstChild;
     std::vector<int> elimTreeChildren;
+
+    // Information on edges leading from non-transit nodes directly to access nodes which is a special case during
+    // customization.
+    std::vector<AccessNodeEdge> accessNodeEdges;
 
 };

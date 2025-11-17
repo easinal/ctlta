@@ -109,3 +109,10 @@ private:
 
 
 };
+
+
+// Contains information on a CCH-edge (u,v) where u is not a transit node and v is a transit node (and as such an access node of u).
+struct AccessNodeEdge {
+    int32_t edge = INVALID_EDGE; // edge ID in CCH upGraph
+    int32_t position = INVALID_INDEX; // index of distance entry for access node v of u in CTNRData
+};
