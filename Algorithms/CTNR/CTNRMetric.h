@@ -8,6 +8,7 @@
 #include "Tools/Constants.h"
 #include "Algorithms/CTNR/CTNRData.h"
 #include "TransitNodeHierarchy.h"
+#include "TransitDistanceTableBuilder.h"
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -19,6 +20,7 @@
 #include "DataStructures/Labels/ParentInfo.h"
 #include <algorithm>
 #include <iostream>
+#include <boost/dynamic_bitset.hpp>
 
 class CTNRMetric {
 
@@ -92,6 +94,7 @@ public:
         minCH = cchMetric.buildMinimumWeightedCH();
         cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
+        transitCH = buildTransitCH(vertexIdToTransitId, transitIdToVertexId);
         computeDistanceTable(data);
         distanceTableComputationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
@@ -116,6 +119,10 @@ public:
         uint64_t size = sizeof(CTNRMetric);
         size += cchMetric.sizeInBytes();
         size += minCH.sizeInBytes();
+        size += localMinCH.sizeInBytes();
+        size += transitCH.sizeInBytes();
+        size += vertexIdToTransitId.size() * sizeof(int32_t);
+        size += transitIdToVertexId.size() * sizeof(int32_t);
 
         return size;
     }
@@ -301,23 +308,37 @@ private:
 
 //TODO: use PHAST to accelerate distance table computation
     void computeDistanceTable(CTNRData &data) {
-        const int n = hierarchy.numTransitNodes();
-        data.resetDistanceTable();
-        using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
-#pragma omp parallel
-        {
-            EliminationTreeQuery<LabelSet> chq(minCH, cch.getEliminationTree());
-#pragma omp for
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j < n; ++j) {
-                    if (i == j) {
-                        data.setDistanceBetweenTransitNodes(i, j, 0);
-                        continue;
+        TransitDistanceTableBuilder builder(hierarchy,
+                                            CH(transitCH),
+                                            vertexIdToTransitId,
+                                            transitIdToVertexId);
+        builder.buildDistanceTable(data);
+            const int n = hierarchy.numTransitNodes();
+            data.resetDistanceTable();
+            using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
+        #pragma omp parallel
+                {
+                    EliminationTreeQuery<LabelSet> chq(minCH, cch.getEliminationTree());
+        #pragma omp for
+                    for (int i = 0; i < n; ++i) {
+                        for (int j = 0; j < n; ++j) {
+                            if (i == j) {
+                                data.setDistanceBetweenTransitNodes(i, j, 0);
+                                continue;
+                            }
+                            chq.run(hierarchy.getRankOfTransitNodeIndex(i), hierarchy.getRankOfTransitNodeIndex(j));
+                            data.setDistanceBetweenTransitNodes(i, j, chq.getDistance());
+                        }
                     }
-                    chq.run(hierarchy.getRankOfTransitNodeIndex(i), hierarchy.getRankOfTransitNodeIndex(j));
-                    data.setDistanceBetweenTransitNodes(i, j, chq.getDistance());
                 }
+
+        for(int i =0;i<10;++i){
+            for(int j =0;j<hierarchy.numTransitNodes();++j){
+                if(data.getDistanceBetweenTransitNodes(i, j) == INFTY)
+                    continue;
+                std::cout<< j << ": " << data.getDistanceBetweenTransitNodes(i, j) << "\t";
             }
+            std::cout<< std::endl;
         }
     }
 
@@ -452,6 +473,24 @@ private:
         return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(), minCH.getRanksPermutation()};
     }
 
+    // Construct CH restricted to edges that are incident only to transit nodes and reindex vertices by transit IDs.
+    CH buildTransitCH(std::vector<int32_t> &vertexToTransitId,
+                      std::vector<int32_t> &transitToVertexId) const {
+        CH::SearchGraph subUpGraph = minCH.upwardGraph();
+        CH::SearchGraph subDownGraph = minCH.downwardGraph();
+        const auto eraseEdgeToTransitNode = [&](const int u, const int v) {
+            return !hierarchy.isTransitNode(v) || !hierarchy.isTransitNode(u);
+        };
+        subUpGraph.eraseEdges(eraseEdgeToTransitNode);
+        subDownGraph.eraseEdges(eraseEdgeToTransitNode);
+        transitToVertexId= hierarchy.getTransitNodes();
+        vertexToTransitId = hierarchy.getRankOfTransitNodeIndex();
+        for(auto &u:transitToVertexId) {
+            std::cout<< u << ": " << vertexToTransitId[u] << "\t";
+        }
+        std::cout<< std::endl;
+        return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(), minCH.getRanksPermutation()};
+    }
 
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
@@ -460,6 +499,11 @@ private:
 
     // Minimum CH restricted to non-transit nodes for local queries.
     CH localMinCH;
+
+    // Minimum CH restricted to transit nodes for distance table computation.
+    CH transitCH;
+    std::vector<int32_t> vertexIdToTransitId;
+    std::vector<int32_t> transitIdToVertexId;
 
     // Elimination tree of the CCH restricted to non-transit nodes for local queries.
     std::vector<int32_t> localEliminationTree;

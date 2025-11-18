@@ -35,7 +35,7 @@ public:
 
         transitNodeThreshold = newTransitNodeThreshold;
         transitNodes.clear();
-        transitNodeToDistanceTableIndex.clear();
+        transitNodeIndexOfRank.assign(inputGraph.numVertices(), -1);
 
         computeVertexLocationInSepDecomp(sepDecomp);
 
@@ -101,7 +101,8 @@ public:
 
     int32_t getTransitNodeIndexOfRank(const int32_t &v) const {
         KASSERT(isTransitNode(v));
-        return transitNodeToDistanceTableIndex.at(v);
+        KASSERT(transitNodeIndexOfRank[v] != -1);
+        return transitNodeIndexOfRank[v];
     }
 
     uint64_t sizeInBytes() const {
@@ -109,12 +110,16 @@ public:
                vertexLevel.size() * sizeof(decltype(vertexLevel)::value_type) +
                packedSideIds.size() * sizeof(decltype(packedSideIds)::value_type) +
                transitNodes.capacity() * sizeof(decltype(transitNodes)::value_type) +
-               transitNodeToDistanceTableIndex.size() * (sizeof(int32_t) + sizeof(int32_t));
+               transitNodeIndexOfRank.size() * sizeof(decltype(transitNodeIndexOfRank)::value_type);
     }
 
     // TODO: remove debug getter for transit nodes
     const std::vector<int32_t> &getTransitNodes() const {
         return transitNodes;
+    }
+
+    const std::vector<int32_t> &getRankOfTransitNodeIndex() const {
+        return transitNodeIndexOfRank;
     }
 
 private:
@@ -233,7 +238,7 @@ private:
         };
         std::sort(transitNodes.begin(), transitNodes.end(), compareByLevelAndRank);
         for (int i = 0; i < transitNodes.size(); ++i) {
-            transitNodeToDistanceTableIndex[transitNodes[i]] = i;
+            transitNodeIndexOfRank[transitNodes[i]] = i;
         }
 
         std::cout << "CTNR: Selected " << transitNodes.size() << " transit nodes from top " << transitNodeThreshold
@@ -252,6 +257,6 @@ private:
     // To map a transit node index i to the CCH-rank r of the associated vertex, use r = transitNodes[i].
     int transitNodeThreshold;
     std::vector<int32_t> transitNodes; // List of vertices in the top transitNodeThreshold levels which make up transit nodes
-    std::unordered_map<int32_t, int32_t> transitNodeToDistanceTableIndex; // maps CCH rank to index in transitNodes
+    std::vector<int32_t> transitNodeIndexOfRank; // maps CCH rank to index in transitNodes
 };
 

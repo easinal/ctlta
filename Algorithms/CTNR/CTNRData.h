@@ -66,6 +66,7 @@ private:
     }
 
     friend class CTNRMetric;
+    friend class TransitDistanceTableBuilder;
 
     int numTransitNodes;
     int numVertices;
