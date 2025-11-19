@@ -18,6 +18,7 @@
 #include "DataStructures/Labels/BasicLabelSet.h"
 #include "DataStructures/Labels/ParentInfo.h"
 #include "DataStructures/Labels/SimdLabelSet.h"
+#include "AccessNodePreprocessor.h"
 #include <algorithm>
 #include <iostream>
 
@@ -27,9 +28,9 @@ public:
 
     // Constructor
     CTNRMetric(const TransitNodeHierarchy &hierarchy, const CCH &cch,
-               const std::vector<AccessNodeEdge> &accessNodeEdges,
+               const AccessNodePreprocessor &preprocessor,
                const int32_t *const inputWeights)
-            : hierarchy(hierarchy), cch(cch), accessNodeEdges(accessNodeEdges),
+            : hierarchy(hierarchy), cch(cch), preprocessor(preprocessor),
               cchMetric(cch, inputWeights),
               localEliminationTree(cch.getEliminationTree()) {
 
@@ -52,11 +53,13 @@ public:
         Timer timer;
         minCH = cchMetric.buildMinimumWeightedCH();
         cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
+//        std::cout << "CCH upgraph num edges = " << cch.getUpwardGraph().numEdges() << ", minCH upgraph num edges = "
+//                  << minCH.upwardGraph().numEdges() << ", minCH downgraph num edges = " << minCH.downwardGraph().numEdges() << std::endl;
         timer.restart();
         computeDistanceTable(data);
         distanceTableComputationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
-        computeAccessNodes(data);
+        computeAccessNodeDistances(data);
         accessNodeComputationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
         localMinCH = buildLocalMinCH();
@@ -104,11 +107,8 @@ public:
 
 private:
 
-    void computeAccessNodes(CTNRData &data) {
+    void computeAccessNodeDistances(CTNRData &data) {
 
-        const auto rankToIdx = [&](const int r) {
-            return data.rankToIdx(r);
-        };
         std::fill(data.forwardDistances.begin(), data.forwardDistances.end(), CTNR_INFTY);
         std::fill(data.backwardDistances.begin(), data.backwardDistances.end(), CTNR_INFTY);
 
@@ -116,52 +116,77 @@ private:
         const auto cchUpWeights = cchMetric.upwardWeights();
         const auto cchDownWeights = cchMetric.downwardWeights();
 #pragma omp parallel for schedule(static)
-        for (const auto& accessNodeEdge : accessNodeEdges) {
-            const auto& e = accessNodeEdge.edge;
-            auto& f = data.forwardDistances[accessNodeEdge.position];
-            auto & b = data.backwardDistances[accessNodeEdge.position];
+        for (const auto &accessNodeEdge: preprocessor.getAccessNodeEdges()) {
+            const auto &e = accessNodeEdge.edge;
+            auto &f = data.forwardDistances[accessNodeEdge.position];
+            auto &b = data.backwardDistances[accessNodeEdge.position];
             f = std::min(f, cchUpWeights[e]);
             b = std::min(b, cchDownWeights[e]);
         }
 
+        const auto &cchLevelSubgraph = preprocessor.getCchLevelSubgraph();
+        const auto &cchLevelOffsets = preprocessor.getCchLevelOffsets();
 
-        // TODO: Debug for USA network
-#pragma omp parallel
-#pragma omp single nowait
-        cch.forEachVertexTopDown([&](int32_t rv) {
+        // Process level by level
+        const auto &firstParallelLevel = preprocessor.getFirstParallelLevel();
+        for (int32_t v = 0; v < cchLevelOffsets[firstParallelLevel]; ++v) {
+            // Compute access node distances by using access node distances of upward neighbors
+            computeAccessNodeDistancesForVertex(v, cchLevelSubgraph, cchUpWeights, data.pos,
+                                                data.accessNodes, data.forwardDistances);
+            computeAccessNodeDistancesForVertex(v, cchLevelSubgraph, cchDownWeights, data.pos,
+                                                data.accessNodes, data.backwardDistances);
+        }
+
+        for (int32_t l = firstParallelLevel; l < cchLevelOffsets.size() - 1; ++l) {
+            const int32_t levelStart = cchLevelOffsets[l];
+            const int32_t levelEnd = cchLevelOffsets[l + 1];
+#pragma omp parallel for schedule(dynamic, 64)
+            for (int32_t v = levelStart; v < levelEnd; ++v) {
                 // Compute access node distances by using access node distances of upward neighbors
-                computeAccessNodeDistancesForVertex(rv, minCH.upwardGraph(), rankToIdx, data.pos,
+                computeAccessNodeDistancesForVertex(v, cchLevelSubgraph, cchUpWeights, data.pos,
                                                     data.accessNodes, data.forwardDistances);
-                computeAccessNodeDistancesForVertex(rv, minCH.downwardGraph(), rankToIdx, data.pos,
+                computeAccessNodeDistancesForVertex(v, cchLevelSubgraph, cchDownWeights, data.pos,
                                                     data.accessNodes, data.backwardDistances);
+            }
+        }
 
-                // Prune access nodes based on domination between each other
-//                pruneAccessNodesForVertex<true>(idx, data.pos, data.accessNodes, data.forwardDistances, data);
-//                pruneAccessNodesForVertex<false>(idx, data.pos, data.accessNodes, data.backwardDistances, data);
-//            }
-        });
+
+//        // TODO: Debug for USA network
+//        const auto& upGraph = cch.getUpwardGraph();
+//#pragma omp parallel
+//#pragma omp single nowait
+//        cch.forEachVertexTopDown([&](int32_t rv) {
+//                // Compute access node distances by using access node distances of upward neighbors
+//                computeAccessNodeDistancesForVertex(rv, upGraph, cchUpWeights, rankToIdx, data.pos,
+//                                                    data.accessNodes, data.forwardDistances);
+//                computeAccessNodeDistancesForVertex(rv, upGraph, cchDownWeights, rankToIdx, data.pos,
+//                                                    data.accessNodes, data.backwardDistances);
+//
+//                // Prune access nodes based on domination between each other
+////                pruneAccessNodesForVertex<true>(idx, data.pos, data.accessNodes, data.forwardDistances, data);
+////                pruneAccessNodesForVertex<false>(idx, data.pos, data.accessNodes, data.backwardDistances, data);
+////            }
+//        });
     }
 
-    template<typename RankToIdx>
-    void computeAccessNodeDistancesForVertex(const int rv,
-                                             const CH::SearchGraph &graph,
-                                             const RankToIdx &rankToIdx,
+    template<typename UpGraphT>
+    void computeAccessNodeDistancesForVertex(const int u,
+                                             const UpGraphT &graph,
+                                             int const *const weights,
                                              const std::vector<int32_t> &dataPos,
                                              const std::vector<int32_t> &dataNodes,
                                              CTNRData::DistanceVector<int32_t> &dataDistances) const {
-        const int idx = rankToIdx(rv);
-        const int startThis = dataPos[idx];
-        FORALL_INCIDENT_EDGES(graph, rv, e) {
+        const int startThis = dataPos[u];
+        FORALL_INCIDENT_EDGES(graph, u, e) {
             const int neighbor = graph.edgeHead(e);
-            const int idxNeighbor = rankToIdx(neighbor);
-            const int w = graph.traversalCost(e);
+            const int w = weights[graph.edgeId(e)];
             KASSERT(w < INFTY);
 
             // If neighbor is not a transit node, propagate all its access nodes. The list of access nodes of the
             // neighbor is a prefix of the list of access nodes of this vertex. Thus, we can just update by index.
-            const auto startNeighbor = dataPos[idxNeighbor];
-            const auto numNeighbor = dataPos[idxNeighbor + 1] - startNeighbor;
-            KASSERT(numNeighbor <= dataPos[idx + 1] - startThis);
+            const auto startNeighbor = dataPos[neighbor];
+            const auto numNeighbor = dataPos[neighbor + 1] - startNeighbor;
+            KASSERT(numNeighbor <= dataPos[u + 1] - startThis);
             if constexpr (!CTNRData::USE_SIMD) {
                 for (auto i = 0; i < numNeighbor; ++i) {
                     KASSERT(dataNodes[startThis + i] == dataNodes[startNeighbor + i]);
@@ -327,7 +352,7 @@ private:
 
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
-    const std::vector<AccessNodeEdge> &accessNodeEdges;
+    const AccessNodePreprocessor &preprocessor;
     CCHMetric cchMetric;
     CH minCH;
 

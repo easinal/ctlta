@@ -12,7 +12,7 @@
 #include "DataStructures/Labels/BasicLabelSet.h"
 
 class CTNRData {
-    static constexpr int LOGK = 3; // K=8
+    static constexpr int LOGK = 3;
     static constexpr int K = 1 << LOGK;
     static_assert(LOGK != 1, "LOGK=1 (K=2) not supported for SIMD label sets.");
     static constexpr bool USE_SIMD = (LOGK > 0);
@@ -76,9 +76,8 @@ public:
 private:
 
     // Get internal vertex index for CCH rank r.
-    // Invert ranks for sequential writing order during top-down access node construction.
     inline int rankToIdx(const int r) const {
-        return numVertices - 1 - r ;
+        return vertexRanksToDataIndices[r];
     }
 
     void resetDistanceTable() {
@@ -91,10 +90,12 @@ private:
     }
 
     friend class CTNRMetric;
-    friend class CTNRPreprocessor;
+    friend class AccessNodePreprocessor;
 
     int numTransitNodes;
     int numVertices;
+
+    Permutation vertexRanksToDataIndices; // Maps CCH rank to index in pos
 
     // Range of access nodes for vertex v is stored in accessNodes[pos[v]..pos[v+1]-1]
     std::vector<int32_t> pos;

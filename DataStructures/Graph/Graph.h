@@ -513,6 +513,25 @@ public:
             head = perm[head];
     }
 
+    // Reorders the edges out of each vertex in increasing order of their head IDs.
+    void sortEdgeHeadsIncreasing() {
+        static_assert(!dynamic, "Graph::sortEdgeHeadsIncreasing is only supported by static graphs.");
+        std::vector<int32_t> edgePermVec(numEdges());
+        std::iota(edgePermVec.begin(), edgePermVec.end(), 0);
+        for (int u = 0; u < numVertices(); ++u) {
+            const int first = firstEdge(u);
+            const int last = lastEdge(u);
+            std::sort(
+                    edgePermVec.begin() + first, edgePermVec.begin() + last,
+                    [this](const int e1, const int e2) {
+                        return edgeHeads[e1] < edgeHeads[e2];
+                    });
+        }
+        Permutation edgePerm(edgePermVec.begin(), edgePermVec.end());
+        edgePerm.applyTo(edgeHeads);
+        RUN_FORALL(edgePerm.applyTo(EdgeAttributes::values));
+    }
+
     // Removes all vertices and edges that do not lie in the vertex-induced subgraph specified by the
     // given bitmask. The bitmask must contain one bit per vertex, which should be set iff the vertex
     // belongs to the subgraph.

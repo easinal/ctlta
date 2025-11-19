@@ -13,7 +13,7 @@
 #include "Algorithms/CTNR/CTNRData.h"
 #include "Algorithms/CTNR/CTNRMetric.h"
 #include "Algorithms/CTNR/CTNRQuery.h"
-#include "Algorithms/CTNR/CTNRPreprocessor.h"
+#include "Algorithms/CTNR/AccessNodePreprocessor.h"
 #include "Algorithms/CTL/BalancedTopologyCentricTreeHierarchy.h"
 #include "Algorithms/CTL/TruncatedTreeLabelling.h"
 #include "Algorithms/CTL/CTLMetric.h"
@@ -361,8 +361,8 @@ inline void runQueries(const CommandLineParser &clp) {
 
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
-        CTNRPreprocessor preprocessor(hierarchy, cch);
-        CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(), useLengths? &graph.length(0) : &graph.travelTime(0));
+        AccessNodePreprocessor preprocessor(hierarchy, cch);
+        CTNRMetric metric(hierarchy, cch, preprocessor, useLengths? &graph.length(0) : &graph.travelTime(0));
 
         // Preprocess CTNR
         preprocessor.preprocess(data);
@@ -668,7 +668,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
 
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
-        CTNRPreprocessor preprocessor(hierarchy, cch);
+        AccessNodePreprocessor preprocessor(hierarchy, cch);
         preprocessor.preprocess(data);
 
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
@@ -678,7 +678,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         int64_t cchCustom, accessNodeComp, distTableComp, buildLocalMinCH, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
-            CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(), useLengths? &graph.length(0) : &graph.travelTime(0));
+            CTNRMetric metric(hierarchy, cch, preprocessor, useLengths? &graph.length(0) : &graph.travelTime(0));
             timer.restart();
             metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp, buildLocalMinCH);
             tot = timer.elapsed<std::chrono::microseconds>();

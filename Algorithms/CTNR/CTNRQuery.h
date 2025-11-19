@@ -25,7 +25,7 @@ public:
 
     // Main query method (s, t are rank IDs)
     int32_t run(int32_t s, int32_t t) {
-        const auto lcaLevel = hierarchy.getLevelOfLowestCommonAncestor(s, t);
+        const auto lcaLevel = hierarchy.getSdLevelOfLowestCommonAncestor(s, t);
         int32_t dist = runTransitNodeQuery(s, t);
         if (lcaLevel >= hierarchy.getTransitNodeThreshold()) {
             lastModeIsLocal = true;

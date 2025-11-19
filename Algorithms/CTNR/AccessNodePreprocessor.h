@@ -1,11 +1,15 @@
 #pragma once
 
 // Computes metric-independent preprocessing for CTNR.
-class CTNRPreprocessor {
+class AccessNodePreprocessor {
+
+    static constexpr int MIN_NUM_VERTICES_IN_LEVEL_FOR_PARALLEL = 1 << 10;
 
 public:
 
-    CTNRPreprocessor(const TransitNodeHierarchy &hierarchy, const CCH &cch)
+    using CchLevelSubgraph = StaticGraph<VertexAttrs<>, EdgeAttrs<EdgeIdAttribute>>;
+
+    AccessNodePreprocessor(const TransitNodeHierarchy &hierarchy, const CCH &cch)
             : hierarchy(hierarchy), cch(cch) {
         // Convert elimination tree to out-tree format
         convertInTreeToOutTree(cch.getEliminationTree(), elimTreeFirstChild, elimTreeChildren);
@@ -15,25 +19,37 @@ public:
         return accessNodeEdges;
     }
 
+    const CchLevelSubgraph &getCchLevelSubgraph() const {
+        return cchLevelSubgraph;
+    }
+
+    const std::vector<int32_t> &getCchLevelOffsets() const {
+        return cchLevelOffsets;
+    }
+
+    const int &getFirstParallelLevel() const {
+        return firstParallelLevel;
+    }
+
     // Determines access nodes of each vertex and allocates distance entries.
     void preprocess(CTNRData &data) {
 
-        int numVertices = cch.getUpwardGraph().numVertices();
+        Permutation cchRankToLevelSubgraphVertex;
+        createLevelSubGraph(cchRankToLevelSubgraphVertex);
+        data.vertexRanksToDataIndices = cchRankToLevelSubgraphVertex;
 
-        const auto rankToIdx = [&](const int r) {
-            return data.rankToIdx(r);
-        };
+        int numVertices = cch.getUpwardGraph().numVertices();
 
         // Debug output:
         std::vector<int32_t> numTransitNodesToRoot(cch.getUpwardGraph().numVertices());
-        countTransitNodesToRoot(numTransitNodesToRoot, rankToIdx);
+        countTransitNodesToRoot(numTransitNodesToRoot, cchRankToLevelSubgraphVertex);
         std::cout << "CTNR: Average number of transit nodes to root: "
                   << static_cast<double>(std::accumulate(numTransitNodesToRoot.begin(), numTransitNodesToRoot.end(), 0))
                      / numVertices << std::endl;
 
         // Count number of access nodes per vertex
         data.pos.resize(numVertices + 1);
-        countMetricIndependentAccessNodes(data.pos, cch.getUpwardGraph(), rankToIdx);
+        countMetricIndependentAccessNodes(data.pos, cch.getUpwardGraph(), cchRankToLevelSubgraphVertex);
 
         if constexpr (CTNRData::USE_SIMD) {
             // Pad counts to multiple of SIMD width
@@ -57,7 +73,7 @@ public:
         data.forwardDistances.resize(sum);
         data.backwardDistances.resize(sum);
 
-        writeMetricIndependentAccessNodes(data.pos, data.accessNodes, cch.getUpwardGraph(), rankToIdx);
+        writeMetricIndependentAccessNodes(data.pos, data.accessNodes, cch.getUpwardGraph(), cchRankToLevelSubgraphVertex);
 
         std::sort(accessNodeEdges.begin(), accessNodeEdges.end(), [](const AccessNodeEdge &a, const AccessNodeEdge &b) {
             return a.edge < b.edge;
@@ -69,7 +85,7 @@ public:
     }
 
     uint64_t sizeInBytes() const {
-        uint64_t size = sizeof(CTNRPreprocessor);
+        uint64_t size = sizeof(AccessNodePreprocessor);
         size += elimTreeFirstChild.size() * sizeof(int);
         size += elimTreeChildren.size() * sizeof(int);
         return size;
@@ -149,15 +165,15 @@ private:
         }
     }
 
-    template<typename GraphT, typename RankToIdxT>
+    template<typename GraphT>
     void countMetricIndependentAccessNodes(std::vector<int32_t> &outCounts, const GraphT &upGraph,
-                                           const RankToIdxT &rankToIdx) const {
+                                           const Permutation &rankToIdx) const {
 
         KASSERT(outCounts.size() == upGraph.numVertices() + 1);
 
         const int root = upGraph.numVertices() - 1;
         if (hierarchy.isTransitNode(root)) {
-            outCounts[rankToIdx(root)] = 0;
+            outCounts[rankToIdx[root]] = 0;
         }
 
         std::stack<int, std::vector<int>> numAdded;
@@ -166,7 +182,7 @@ private:
         const auto recurse = [&](const int /*parent*/, const int child) {
             numAdded.push(0);
             if (hierarchy.isTransitNode(child)) {
-                outCounts[rankToIdx(child)] = 0;
+                outCounts[rankToIdx[child]] = 0;
                 return;
             }
             FORALL_INCIDENT_EDGES(upGraph, child, e) {
@@ -180,7 +196,7 @@ private:
                 active.push(node);
                 ++numAdded.top();
             }
-            outCounts[rankToIdx(child)] = static_cast<int32_t>(active.size());
+            outCounts[rankToIdx[child]] = static_cast<int32_t>(active.size());
         };
 
         const auto backtrack = [&](const int /*child*/, const int /*parent*/) {
@@ -195,23 +211,24 @@ private:
         dfsOnTree(elimTreeFirstChild, elimTreeChildren, recurse, backtrack);
     }
 
-    template<typename GraphT, typename RankToIdxT>
-    void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos, std::vector<int32_t> &entries,
+    template<typename GraphT>
+    void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos,
+                                           std::vector<int32_t> &entries,
                                            const GraphT &upGraph,
-                                           const RankToIdxT &rankToIdx) {
+                                           const Permutation &rankToIdx) {
 
         KASSERT(pos.size() == upGraph.numVertices() + 1);
         std::vector<int> curNumEntries(upGraph.numVertices(), 0);
 
         const auto recurse = [&](const int parent, const int child) {
-            const int childIdx = rankToIdx(child);
+            const int childIdx = rankToIdx[child];
             const int startChild = pos[childIdx];
             if (hierarchy.isTransitNode(child)) {
                 return;
             }
 
             // Add all transit nodes from parent to child
-            const int parentIdx = rankToIdx(parent);
+            const int parentIdx = rankToIdx[parent];
             KASSERT(curNumEntries[parentIdx] <= pos[parentIdx + 1] - pos[parentIdx] &&
                     curNumEntries[parentIdx] >= pos[parentIdx + 1] - pos[parentIdx] - CTNRData::K);
             for (int i = 0; i < curNumEntries[parentIdx]; ++i) {
@@ -252,22 +269,21 @@ private:
     }
 
 
-    template<typename RankToIdxT>
     void countTransitNodesToRoot(std::vector<int32_t> &outCounts,
-                                const RankToIdxT &rankToIdx) const {
+                                const Permutation& rankToIdx) const {
 
         int curCount = 0;
         const int root = outCounts.size() - 1;
         if (hierarchy.isTransitNode(root)) {
             ++curCount;
         }
-        outCounts[rankToIdx(root)] = curCount;
+        outCounts[rankToIdx[root]] = curCount;
 
         const auto recurse = [&](const int /*parent*/, const int child) {
             if (hierarchy.isTransitNode(child)) {
                 ++curCount;
             }
-            outCounts[rankToIdx(child)] = curCount;
+            outCounts[rankToIdx[child]] = curCount;
         };
 
         const auto backtrack = [&](const int child, const int /*parent*/) {
@@ -280,6 +296,114 @@ private:
     }
 
 
+    void createLevelSubGraph(Permutation &cchRankToLevelSubgraphVertex) {
+        const auto& originalGraph = cch.getUpwardGraph();
+        const auto numVertices = originalGraph.numVertices();
+
+        // Build level subgraph by removing all edges leading to transit nodes
+        AlignedVector<CchLevelSubgraph::OutEdgeRange> outEdges(numVertices + 1);
+        AlignedVector<int32_t> edgeHeads;
+        edgeHeads.reserve(originalGraph.numEdges());
+        int edgeCount = 0;
+        AlignedVector<int32_t> originalEdgeIds;
+        originalEdgeIds.reserve(originalGraph.numEdges());
+        for (int32_t v = 0; v < numVertices; ++v) {
+            outEdges[v].first() = edgeCount;
+            FORALL_INCIDENT_EDGES(originalGraph, v, e) {
+                const int32_t neighbor = originalGraph.edgeHead(e);
+                if (hierarchy.isTransitNode(neighbor))
+                    continue;
+                edgeHeads.push_back(neighbor);
+                originalEdgeIds.push_back(e);
+                ++edgeCount;
+            }
+        }
+        outEdges[numVertices].first() = edgeCount;
+        cchLevelSubgraph = CchLevelSubgraph(std::move(outEdges), std::move(edgeHeads), edgeCount, std::move(originalEdgeIds));
+
+        // Compute bottom-up levels of level subgraph
+        std::vector<int32_t> levelOfVertex(numVertices, 0);
+        cch.forEachVertexBottomUp([&](const int v) {
+            FORALL_INCIDENT_EDGES(cchLevelSubgraph, v, e) {
+                const int32_t neighbor = cchLevelSubgraph.edgeHead(e);
+                levelOfVertex[neighbor] = std::max(levelOfVertex[neighbor], levelOfVertex[v] + 1);
+            }
+        });
+        const int32_t maxLevel = *std::max_element(levelOfVertex.begin(), levelOfVertex.end());
+
+        // Invert levels to get top-down levels and compute level sizes
+        const int numLevels = maxLevel + 1;
+        cchLevelOffsets = std::vector<int32_t>(numLevels + 1, 0);
+        for (int v = 0; v < numVertices; ++v) {
+            const int newLevel = maxLevel - levelOfVertex[v];
+            levelOfVertex[v] = newLevel;
+            ++cchLevelOffsets[newLevel];
+        }
+
+        // Prefix sum to get level offsets
+        int32_t sum = 0;
+        for (int32_t l = 0; l < numLevels; ++l) {
+            const int32_t size = cchLevelOffsets[l];
+            cchLevelOffsets[l] = sum;
+            sum += size;
+        }
+        KASSERT(sum == numVertices);
+        cchLevelOffsets[numLevels] = sum;
+
+        // Reorder vertices in level subgraph according to levels
+        std::vector<int32_t> permVec(numVertices);
+        std::vector<int32_t> nextPosInLevel = cchLevelOffsets;
+        for (int v = 0; v < numVertices; ++v) {
+            const int32_t level = levelOfVertex[v];
+            const int32_t pos = nextPosInLevel[level]++;
+            permVec[v] = pos;
+        }
+//        // Within each level, sort vertices by ID in the input graph
+//        const auto &rankToOriginalId = cch.getContractionOrder();
+//        for (int32_t l = 0; l < numLevels; ++l) {
+//            const int32_t levelStart = cchLevelOffsets[l];
+//            const int32_t levelEnd = cchLevelOffsets[l + 1];
+//            std::sort(invertedPermVec.begin() + levelStart, invertedPermVec.begin() + levelEnd,
+//                      [&](const int32_t v1, const int32_t v2) {
+//                          return rankToOriginalId[v1] < rankToOriginalId[v2];
+//                      });
+//        }
+
+        cchRankToLevelSubgraphVertex = Permutation(permVec.begin(), permVec.end());
+        KASSERT(cchRankToLevelSubgraphVertex.validate());
+        cchLevelSubgraph.permuteVertices(cchRankToLevelSubgraphVertex);
+        cchLevelSubgraph.sortEdgeHeadsIncreasing();
+
+        // Set first parallel level
+        for (int l = 0; l < numLevels; ++l) {
+            const int32_t levelSize = cchLevelOffsets[l + 1] - cchLevelOffsets[l];
+            if (levelSize >= MIN_NUM_VERTICES_IN_LEVEL_FOR_PARALLEL) {
+                firstParallelLevel = l;
+                break;
+            }
+        }
+
+        // Verify correctness of level ordering
+        const auto inversePerm = cchRankToLevelSubgraphVertex.getInversePermutation();
+        for (int l = 0; l < numLevels; ++l) {
+            KASSERT(nextPosInLevel[l] == cchLevelOffsets[l + 1]);
+            for (int32_t v = cchLevelOffsets[l]; v < cchLevelOffsets[l + 1]; ++v) {
+                const int32_t originalId = inversePerm[v];
+                KASSERT(levelOfVertex[originalId] == l);
+                FORALL_INCIDENT_EDGES(cchLevelSubgraph, v, e) {
+                    const int32_t neighbor = cchLevelSubgraph.edgeHead(e);
+                    const int32_t originalNeighborId = inversePerm[neighbor];
+                    KASSERT(levelOfVertex[originalNeighborId] < l);
+                }
+            }
+        }
+
+//        // Debug output: Number of vertices per level
+//        for (int l = 0; l < numLevels; ++l) {
+//            std::cout << "CTNR: CCH Level " << l << " has " << (cchLevelOffsets[l + 1] - cchLevelOffsets[l]) << " vertices." << std::endl;
+//        }
+    }
+
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
 
@@ -290,5 +414,18 @@ private:
     // Information on edges leading from non-transit nodes directly to access nodes which is a special case during
     // customization.
     std::vector<AccessNodeEdge> accessNodeEdges;
+
+
+    // Subgraph of CCH graph consisting of only edges that do not lead to transit nodes.
+    // EdgeIdAttribute contains a mapping to the edges in the original CCH graph.
+    // Vertices are ordered by levels of the graph top-down. This is helpful for locality during customization.
+    CchLevelSubgraph cchLevelSubgraph;
+
+    // Offsets of levels in cchLevelSubgraph.
+    // Level l contains all vertices v with cchLevelOffsets[l] <= v < cchLevelOffsets[l+1].
+    // Useful for level-by-level processing during customization.
+    std::vector<int32_t> cchLevelOffsets;
+
+    int firstParallelLevel = INFTY;
 
 };
