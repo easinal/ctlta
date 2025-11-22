@@ -12,9 +12,9 @@
 class TransitDistanceTableBuilder {
 public:
     TransitDistanceTableBuilder(const TransitNodeHierarchy &hierarchy,
-                                CH transitCH)
+                                const CH &minCH)
             : hierarchy(hierarchy),
-              transitCH(std::move(transitCH)) {}
+              minCH(minCH) {}
 
     void buildDistanceTable(CTNRData &data) const {
         const int numTransit = hierarchy.numTransitNodes();
@@ -33,8 +33,8 @@ private:
                         CTNRData &data ) const {
         const auto &transitIdToVertexId = hierarchy.getTransitNodes();
         const auto &vertexIdToTransitId = hierarchy.getRankOfTransitNodeIndex();
-        const auto &upGraph = transitCH.upwardGraph();
-        const auto &downGraph = transitCH.downwardGraph();
+        const auto &upGraph = minCH.upwardGraph();
+        const auto &downGraph = minCH.downwardGraph();
         using PQEntry = std::pair<int32_t, int32_t>;
         std::priority_queue<PQEntry, std::vector<PQEntry>, std::greater<PQEntry>> pq;
         const int sourceVertexId = transitIdToVertexId[sourceTransitIndex];
@@ -61,13 +61,12 @@ private:
         for (int i = hierarchy.numTransitNodes() - 1; i >= 0; --i) {
             const int u = transitIdToVertexId[i];
             FORALL_INCIDENT_EDGES(downGraph, u, e) {
-                const int v = downGraph.edgeHead(e);
-                const int neighborTransitIndex = vertexIdToTransitId[v];
+                const int neighborTransitIndex = vertexIdToTransitId[downGraph.edgeHead(e)];
                 const int32_t w = downGraph.traversalCost(e);
-
-                if (w == INFTY)
+                const int32_t vd = data.getDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex);
+                if (w == INFTY || vd == INFTY)
                     continue;
-                const int32_t nd = data.getDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex) + w;
+                const int32_t nd = vd + w;
                 if (nd < data.getDistanceBetweenTransitNodes(sourceTransitIndex, i))
                     data.setDistanceBetweenTransitNodes(sourceTransitIndex, i, nd);
             }
@@ -75,7 +74,7 @@ private:
     }
 
     const TransitNodeHierarchy &hierarchy;
-    CH transitCH;
+    const CH &minCH;
 };
 
 

@@ -94,7 +94,6 @@ public:
         minCH = cchMetric.buildMinimumWeightedCH();
         cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
-        transitCH = buildTransitCH();
         computeDistanceTable(data);
         distanceTableComputationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
@@ -120,7 +119,6 @@ public:
         size += cchMetric.sizeInBytes();
         size += minCH.sizeInBytes();
         size += localMinCH.sizeInBytes();
-        size += transitCH.sizeInBytes();
 
         return size;
     }
@@ -307,7 +305,7 @@ private:
 //TODO: use PHAST to accelerate distance table computation
     void computeDistanceTable(CTNRData &data) {
         TransitDistanceTableBuilder builder(hierarchy,
-                                            CH(transitCH));
+                                            minCH);
         builder.buildDistanceTable(data);
     }
 
@@ -442,18 +440,6 @@ private:
         return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(), minCH.getRanksPermutation()};
     }
 
-    // Construct CH restricted to edges that are incident only to transit nodes and reindex vertices by transit IDs.
-    CH buildTransitCH() const {
-        CH::SearchGraph subUpGraph = minCH.upwardGraph();
-        CH::SearchGraph subDownGraph = minCH.downwardGraph();
-        const auto eraseEdgeToTransitNode = [&](const int u, const int v) {
-            return !hierarchy.isTransitNode(v) || !hierarchy.isTransitNode(u);
-        };
-        subUpGraph.eraseEdges(eraseEdgeToTransitNode);
-        subDownGraph.eraseEdges(eraseEdgeToTransitNode);
-        return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(), minCH.getRanksPermutation()};
-    }
-
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
     CCHMetric cchMetric;
@@ -461,9 +447,6 @@ private:
 
     // Minimum CH restricted to non-transit nodes for local queries.
     CH localMinCH;
-
-    // Minimum CH restricted to transit nodes for distance table computation.
-    CH transitCH;
 
     // Elimination tree of the CCH restricted to non-transit nodes for local queries.
     std::vector<int32_t> localEliminationTree;
