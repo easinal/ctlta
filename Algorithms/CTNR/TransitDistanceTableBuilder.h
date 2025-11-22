@@ -12,13 +12,9 @@
 class TransitDistanceTableBuilder {
 public:
     TransitDistanceTableBuilder(const TransitNodeHierarchy &hierarchy,
-                                CH transitCH,
-                                std::vector<int32_t> vertexIdToTransitId,
-                                std::vector<int32_t> transitIdToVertexId)
+                                CH transitCH)
             : hierarchy(hierarchy),
-              transitCH(std::move(transitCH)),
-              vertexIdToTransitId(std::move(vertexIdToTransitId)),
-              transitIdToVertexId(std::move(transitIdToVertexId)) {}
+              transitCH(std::move(transitCH)) {}
 
     void buildDistanceTable(CTNRData &data) const {
         const int numTransit = hierarchy.numTransitNodes();
@@ -34,7 +30,9 @@ public:
 
 private:
     void runTransitSSSP(const int sourceTransitIndex,
-                        CTNRData &data) const {
+                        CTNRData &data ) const {
+        const auto &transitIdToVertexId = hierarchy.getTransitNodes();
+        const auto &vertexIdToTransitId = hierarchy.getRankOfTransitNodeIndex();
         const auto &upGraph = transitCH.upwardGraph();
         const auto &downGraph = transitCH.downwardGraph();
         using PQEntry = std::pair<int32_t, int32_t>;
@@ -42,7 +40,6 @@ private:
         const int sourceVertexId = transitIdToVertexId[sourceTransitIndex];
         data.setDistanceBetweenTransitNodes(sourceTransitIndex, sourceTransitIndex, 0);
         pq.emplace(0, sourceVertexId);
-
         while (!pq.empty()) {
             const auto [d, u] = pq.top();
             pq.pop();
@@ -63,28 +60,22 @@ private:
         }
         for (int i = hierarchy.numTransitNodes() - 1; i >= 0; --i) {
             const int u = transitIdToVertexId[i];
-            const int32_t du = data.getDistanceBetweenTransitNodes(sourceTransitIndex, vertexIdToTransitId[u]);
-            if (du == INFTY)
-                continue;
             FORALL_INCIDENT_EDGES(downGraph, u, e) {
-                
                 const int v = downGraph.edgeHead(e);
                 const int neighborTransitIndex = vertexIdToTransitId[v];
                 const int32_t w = downGraph.traversalCost(e);
 
                 if (w == INFTY)
                     continue;
-                const int32_t nd = du + w;
-                if (nd < data.getDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex))
-                    data.setDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex, nd);
+                const int32_t nd = data.getDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex) + w;
+                if (nd < data.getDistanceBetweenTransitNodes(sourceTransitIndex, i))
+                    data.setDistanceBetweenTransitNodes(sourceTransitIndex, i, nd);
             }
         }
     }
 
     const TransitNodeHierarchy &hierarchy;
     CH transitCH;
-    std::vector<int32_t> vertexIdToTransitId;
-    std::vector<int32_t> transitIdToVertexId;
 };
 
 
