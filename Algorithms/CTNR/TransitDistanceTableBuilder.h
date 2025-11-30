@@ -12,9 +12,13 @@
 class TransitDistanceTableBuilder {
 public:
     TransitDistanceTableBuilder(const TransitNodeHierarchy &hierarchy,
-                                const CH &minCH)
+                                const CCH::UpGraph &cchGraph,
+                                int32_t const * const upWeights,
+                                int32_t const * const downWeights)
             : hierarchy(hierarchy),
-              minCH(minCH) {}
+              cchGraph(cchGraph),
+              upWeights(upWeights),
+              downWeights(downWeights) {}
 
     void buildDistanceTable(CTNRData &data) const {
         const int numTransit = hierarchy.numTransitNodes();
@@ -33,8 +37,7 @@ private:
                         CTNRData &data ) const {
         const auto &transitIdToVertexId = hierarchy.getTransitNodes();
         const auto &vertexIdToTransitId = hierarchy.getRankOfTransitNodeIndex();
-        const auto &upGraph = minCH.upwardGraph();
-        const auto &downGraph = minCH.downwardGraph();
+//        const auto &downGraph = minCH.downwardGraph();
         using PQEntry = std::pair<int32_t, int32_t>;
         std::priority_queue<PQEntry, std::vector<PQEntry>, std::greater<PQEntry>> pq;
         const int sourceVertexId = transitIdToVertexId[sourceTransitIndex];
@@ -45,10 +48,10 @@ private:
             pq.pop();
             if (d != data.getDistanceBetweenTransitNodes(sourceTransitIndex, vertexIdToTransitId[u]))
                 continue;
-            FORALL_INCIDENT_EDGES(upGraph, u, e) {
-                const int v = upGraph.edgeHead(e);
+            FORALL_INCIDENT_EDGES(cchGraph, u, e) {
+                const int v = cchGraph.edgeHead(e);
                 const int neighborTransitIndex = vertexIdToTransitId[v];
-                const int32_t w = upGraph.traversalCost(e);
+                const int32_t w = upWeights[e];
                 if (w == INFTY)
                     continue;
                 const int32_t nd = d + w;
@@ -60,9 +63,9 @@ private:
         }
         for (int i = hierarchy.numTransitNodes() - 1; i >= 0; --i) {
             const int u = transitIdToVertexId[i];
-            FORALL_INCIDENT_EDGES(downGraph, u, e) {
-                const int neighborTransitIndex = vertexIdToTransitId[downGraph.edgeHead(e)];
-                const int32_t w = downGraph.traversalCost(e);
+            FORALL_INCIDENT_EDGES(cchGraph, u, e) {
+                const int neighborTransitIndex = vertexIdToTransitId[cchGraph.edgeHead(e)];
+                const int32_t w = downWeights[e];
                 const int32_t vd = data.getDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex);
                 if (w == INFTY || vd == INFTY)
                     continue;
@@ -74,7 +77,9 @@ private:
     }
 
     const TransitNodeHierarchy &hierarchy;
-    const CH &minCH;
+    const CCH::UpGraph &cchGraph;
+    int32_t const * const upWeights;
+    int32_t const * const downWeights;
 };
 
 

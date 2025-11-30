@@ -54,9 +54,12 @@ public:
                                    int64_t &cchPerfectCustomizationTime,
                                    int64_t &cchConstructChTime,
                                    int64_t &accessNodeComputationTime,
-                                   int64_t &distanceTableComputationTime, int64_t &buildLocalMinCHTime) {
-        minCH = cchMetric.buildMinimumWeightedCH<Timer>(cchBasicCustomizationTime, cchPerfectCustomizationTime,
-                                                        cchConstructChTime);
+                                   int64_t &distanceTableComputationTime,
+                                   int64_t &buildLocalMinCHTime) {
+//        minCH = cchMetric.buildMinimumWeightedCH<Timer>(cchBasicCustomizationTime, cchPerfectCustomizationTime,
+//                                                        cchConstructChTime);
+        cchConstructChTime = 0;
+        localMinCH = customizeCCHAndBuildLocalMinCH(cchBasicCustomizationTime, cchPerfectCustomizationTime, buildLocalMinCHTime);
         Timer timer;
 //        cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
@@ -65,9 +68,9 @@ public:
         timer.restart();
         computeAccessNodes(data);
         accessNodeComputationTime = timer.elapsed<std::chrono::microseconds>();
-        timer.restart();
-        localMinCH = buildLocalMinCH();
-        buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
+//        timer.restart();
+//        localMinCH = buildLocalMinCH();
+//        buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
 
 //        // Debug information
 //        int64_t sumNonInftyAfterPruningForward = 0;
@@ -95,7 +98,7 @@ public:
                   << " microseconds." << std::endl;
     }
 
-    const CH &getMinCH() const { return minCH; }
+//    const CH &getMinCH() const { return minCH; }
 
     const CH &getLocalMinCH() const { return localMinCH; }
 
@@ -105,7 +108,7 @@ public:
     uint64_t sizeInBytes() const {
         uint64_t size = sizeof(CTNRMetric);
         size += cchMetric.sizeInBytes();
-        size += minCH.sizeInBytes();
+//        size += minCH.sizeInBytes();
         size += localMinCH.sizeInBytes();
 
         return size;
@@ -139,9 +142,9 @@ private:
 #pragma omp single nowait
         cch.forEachVertexTopDown([&](int32_t rv) {
             // Compute access node distances by using access node distances of upward neighbors
-            computeAccessNodeDistancesForVertex(rv, minCH.upwardGraph(), rankToIdx, data.pos,
+            computeAccessNodeDistancesForVertex(rv, localMinCH.upwardGraph(), rankToIdx, data.pos,
                                                 data.accessNodes, data.forwardDistances);
-            computeAccessNodeDistancesForVertex(rv, minCH.downwardGraph(), rankToIdx, data.pos,
+            computeAccessNodeDistancesForVertex(rv, localMinCH.downwardGraph(), rankToIdx, data.pos,
                                                 data.accessNodes, data.backwardDistances);
 
             // Prune access nodes based on domination between each other
@@ -228,10 +231,9 @@ private:
         }
     }
 
-//TODO: use PHAST to accelerate distance table computation
     void computeDistanceTable(CTNRData &data) {
-        TransitDistanceTableBuilder builder(hierarchy,
-                                            minCH);
+        // TODO: implement minCH for only transit node subgraph to use in distance table computation instead of CCH graph?
+        TransitDistanceTableBuilder builder(hierarchy, cch.getUpwardGraph(), cchMetric.upwardWeights(), cchMetric.downwardWeights());
         builder.buildDistanceTable(data);
     }
 
@@ -303,26 +305,72 @@ private:
         }
     }
 
-    // Construct subgraph CH restricted to vertices below transit nodes, which is enough for local queries.
-    CH buildLocalMinCH() const {
-        CH::SearchGraph subUpGraph = minCH.upwardGraph();
-        CH::SearchGraph subDownGraph = minCH.downwardGraph();
-        const auto eraseEdgeToTransitNode = [&](const int, const int v) {
-            return hierarchy.isTransitNode(v);
-        };
-        subUpGraph.eraseEdges(eraseEdgeToTransitNode);
-        subDownGraph.eraseEdges(eraseEdgeToTransitNode);
-        KASSERT(subUpGraph.isDefrag() && subUpGraph.validate());
-        KASSERT(subDownGraph.isDefrag() && subDownGraph.validate());
-        return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(),
-                minCH.getRanksPermutation()};
+    // Customize CCH including perfect customization and construct CH that only has edges required for the given metric.
+    // CH is restricted to vertices below transit nodes, which is enough for local queries.
+    CH customizeCCHAndBuildLocalMinCH(int64_t& cchBasicCustomizationTime, int64_t& cchPerfectCustomizationTime,
+                                      int64_t &buildLocalMinCHTime) {
+
+        Timer timer;
+        cchMetric.customize();
+        cchBasicCustomizationTime = timer.elapsed<std::chrono::microseconds>();
+
+        timer.restart();
+        const auto& cchGraph = cch.getUpwardGraph();
+        std::vector<int8_t> keepUpEdge;
+        std::vector<int8_t> keepDownEdge;
+
+#pragma omp parallel sections
+        {
+#pragma omp section
+            keepUpEdge.resize(cchGraph.numEdges() + 1, true);
+#pragma omp section
+            keepDownEdge.resize(cchGraph.numEdges() + 1, true);
+        }
+
+        keepUpEdge.back() = false;
+        keepDownEdge.back() = false;
+        // Run perfect customization marking all edges for removal that are not needed for this metric
+        cchMetric.runPerfectCustomization(
+                [&](const int e) { keepUpEdge[e] = false; },
+                [&](const int e) { keepDownEdge[e] = false; });
+
+        // Also mark all edges leading to transit nodes for removal
+        FORALL_EDGES(cchGraph, e) {
+            const auto head = cchGraph.edgeHead(e);
+            if (hierarchy.isTransitNode(head)) {
+                keepUpEdge[e] = false;
+                keepDownEdge[e] = false;
+            }
+        }
+
+        cchPerfectCustomizationTime = timer.elapsed<std::chrono::microseconds>();
+
+        timer.restart();
+        CH ch = cchMetric.buildCHKeepingGivenEdges(keepUpEdge, keepDownEdge);
+        buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
+
+        return ch;
+
+
+
+//        CH::SearchGraph subUpGraph = minCH.upwardGraph();
+//        CH::SearchGraph subDownGraph = minCH.downwardGraph();
+//        const auto eraseEdgeToTransitNode = [&](const int, const int v) {
+//            return hierarchy.isTransitNode(v);
+//        };
+//        subUpGraph.eraseEdges(eraseEdgeToTransitNode);
+//        subDownGraph.eraseEdges(eraseEdgeToTransitNode);
+//        KASSERT(subUpGraph.isDefrag() && subUpGraph.validate());
+//        KASSERT(subDownGraph.isDefrag() && subDownGraph.validate());
+//        return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(),
+//                minCH.getRanksPermutation()};
     }
 
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
     const std::vector<AccessNodeEdge> &accessNodeEdges;
     CCHMetric cchMetric;
-    CH minCH;
+//    CH minCH;
 
     // Minimum CH restricted to non-transit nodes for local queries.
     CH localMinCH;
