@@ -674,15 +674,15 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
 
-        outputFile << "cch_customization,access_node_computation,distance_table_computation,local_min_ch_construction,total_time\n";
-        int64_t cchCustom, accessNodeComp, distTableComp, buildLocalMinCH, tot;
+        outputFile << "cch_basic_customization,cch_perfect_customization,cch_build_ch,access_node_computation,distance_table_computation,local_min_ch_construction,total_time\n";
+        int64_t cchBasicCustom, cchPerfectCustom, cchBuildCH, accessNodeComp, distTableComp, buildLocalMinCH, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
             CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(), useLengths? &graph.length(0) : &graph.travelTime(0));
             timer.restart();
-            metric.customizeWithMeasurements(data, cchCustom, accessNodeComp, distTableComp, buildLocalMinCH);
+            metric.customizeWithMeasurements(data, cchBasicCustom, cchPerfectCustom, cchBuildCH, accessNodeComp, distTableComp, buildLocalMinCH);
             tot = timer.elapsed<std::chrono::microseconds>();
-            outputFile << cchCustom << ',' << accessNodeComp << ',' << distTableComp << ',' << buildLocalMinCH << ',' << tot << '\n';
+            outputFile << cchBasicCustom << ',' << cchPerfectCustom << ',' << cchBuildCH << ',' << accessNodeComp << ',' << distTableComp << ',' << buildLocalMinCH << ',' << tot << '\n';
         }
     } else if (algorithmName == "CTL-custom") {
 

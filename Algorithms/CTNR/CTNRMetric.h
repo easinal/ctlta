@@ -8,6 +8,7 @@
 #include "Tools/Constants.h"
 #include "Algorithms/CTNR/CTNRData.h"
 #include "TransitNodeHierarchy.h"
+#include "TransitDistanceTableBuilder.h"
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,6 +21,7 @@
 #include "DataStructures/Labels/SimdLabelSet.h"
 #include <algorithm>
 #include <iostream>
+#include <boost/dynamic_bitset.hpp>
 
 class CTNRMetric {
 
@@ -42,16 +44,21 @@ public:
 
     // Customization phase
     void customize(CTNRData &data) {
-        int64_t dummy1, dummy2, dummy3, dummy4;
-        customizeWithMeasurements(data, dummy1, dummy2, dummy3, dummy4);
+        int64_t dummy1, dummy2, dummy3, dummy4, dummy5, dummy6;
+        customizeWithMeasurements(data, dummy1, dummy2, dummy3, dummy4, dummy5, dummy6);
     }
 
     // Sets measurement parameters to times for each step in microseconds.
-    void customizeWithMeasurements(CTNRData &data, int64_t &cchCustomizationTime, int64_t &accessNodeComputationTime,
+    void customizeWithMeasurements(CTNRData &data,
+                                   int64_t &cchBasicCustomizationTime,
+                                   int64_t &cchPerfectCustomizationTime,
+                                   int64_t &cchConstructChTime,
+                                   int64_t &accessNodeComputationTime,
                                    int64_t &distanceTableComputationTime, int64_t &buildLocalMinCHTime) {
+        minCH = cchMetric.buildMinimumWeightedCH<Timer>(cchBasicCustomizationTime, cchPerfectCustomizationTime,
+                                                        cchConstructChTime);
         Timer timer;
-        minCH = cchMetric.buildMinimumWeightedCH();
-        cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
+//        cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
         computeDistanceTable(data);
         distanceTableComputationTime = timer.elapsed<std::chrono::microseconds>();
@@ -82,7 +89,8 @@ public:
 //                  << static_cast<double>(sumNonInftyAfterPruningBackward) / cch.getUpwardGraph().numVertices()
 //                  << std::endl;
 
-        std::cout << "Finished CTNR customization in " << (cchCustomizationTime + accessNodeComputationTime +
+        std::cout << "Finished CTNR customization in " << (cchBasicCustomizationTime + cchPerfectCustomizationTime +
+                                                           cchConstructChTime + accessNodeComputationTime +
                                                            distanceTableComputationTime + buildLocalMinCHTime)
                   << " microseconds." << std::endl;
     }
@@ -98,6 +106,7 @@ public:
         uint64_t size = sizeof(CTNRMetric);
         size += cchMetric.sizeInBytes();
         size += minCH.sizeInBytes();
+        size += localMinCH.sizeInBytes();
 
         return size;
     }
@@ -116,10 +125,10 @@ private:
         const auto cchUpWeights = cchMetric.upwardWeights();
         const auto cchDownWeights = cchMetric.downwardWeights();
 #pragma omp parallel for schedule(static)
-        for (const auto& accessNodeEdge : accessNodeEdges) {
-            const auto& e = accessNodeEdge.edge;
-            auto& f = data.forwardDistances[accessNodeEdge.position];
-            auto & b = data.backwardDistances[accessNodeEdge.position];
+        for (const auto &accessNodeEdge: accessNodeEdges) {
+            const auto &e = accessNodeEdge.edge;
+            auto &f = data.forwardDistances[accessNodeEdge.position];
+            auto &b = data.backwardDistances[accessNodeEdge.position];
             f = std::min(f, cchUpWeights[e]);
             b = std::min(b, cchDownWeights[e]);
         }
@@ -129,13 +138,13 @@ private:
 #pragma omp parallel
 #pragma omp single nowait
         cch.forEachVertexTopDown([&](int32_t rv) {
-                // Compute access node distances by using access node distances of upward neighbors
-                computeAccessNodeDistancesForVertex(rv, minCH.upwardGraph(), rankToIdx, data.pos,
-                                                    data.accessNodes, data.forwardDistances);
-                computeAccessNodeDistancesForVertex(rv, minCH.downwardGraph(), rankToIdx, data.pos,
-                                                    data.accessNodes, data.backwardDistances);
+            // Compute access node distances by using access node distances of upward neighbors
+            computeAccessNodeDistancesForVertex(rv, minCH.upwardGraph(), rankToIdx, data.pos,
+                                                data.accessNodes, data.forwardDistances);
+            computeAccessNodeDistancesForVertex(rv, minCH.downwardGraph(), rankToIdx, data.pos,
+                                                data.accessNodes, data.backwardDistances);
 
-                // Prune access nodes based on domination between each other
+            // Prune access nodes based on domination between each other
 //                pruneAccessNodesForVertex<true>(idx, data.pos, data.accessNodes, data.forwardDistances, data);
 //                pruneAccessNodesForVertex<false>(idx, data.pos, data.accessNodes, data.backwardDistances, data);
 //            }
@@ -221,24 +230,9 @@ private:
 
 //TODO: use PHAST to accelerate distance table computation
     void computeDistanceTable(CTNRData &data) {
-        const int n = hierarchy.numTransitNodes();
-        data.resetDistanceTable();
-        using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
-#pragma omp parallel
-        {
-            EliminationTreeQuery<LabelSet> chq(minCH, cch.getEliminationTree());
-#pragma omp for
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j < n; ++j) {
-                    if (i == j) {
-                        data.setDistanceBetweenTransitNodes(i, j, 0);
-                        continue;
-                    }
-                    chq.run(hierarchy.getRankOfTransitNodeIndex(i), hierarchy.getRankOfTransitNodeIndex(j));
-                    data.setDistanceBetweenTransitNodes(i, j, chq.getDistance());
-                }
-            }
-        }
+        TransitDistanceTableBuilder builder(hierarchy,
+                                            minCH);
+        builder.buildDistanceTable(data);
     }
 
 
@@ -323,7 +317,6 @@ private:
         return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(),
                 minCH.getRanksPermutation()};
     }
-
 
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
