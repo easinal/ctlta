@@ -56,22 +56,14 @@ public:
                                    int64_t &accessNodeComputationTime,
                                    int64_t &distanceTableComputationTime,
                                    int64_t &buildLocalMinCHTime) {
-//        minCH = cchMetric.buildMinimumWeightedCH<Timer>(cchBasicCustomizationTime, cchPerfectCustomizationTime,
-//                                                        cchConstructChTime);
         cchConstructChTime = 0;
         localMinCH = customizeCCHAndBuildLocalMinCH(cchBasicCustomizationTime, cchPerfectCustomizationTime, buildLocalMinCHTime);
         Timer timer;
-//        cchCustomizationTime = timer.elapsed<std::chrono::microseconds>();
-        timer.restart();
         computeDistanceTable(data);
         distanceTableComputationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
         computeAccessNodes(data);
         accessNodeComputationTime = timer.elapsed<std::chrono::microseconds>();
-//        timer.restart();
-//        localMinCH = buildLocalMinCH();
-//        buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
-
 //        // Debug information
 //        int64_t sumNonInftyAfterPruningForward = 0;
 //        int64_t sumNonInftyAfterPruningBackward = 0;
@@ -98,8 +90,6 @@ public:
                   << " microseconds." << std::endl;
     }
 
-//    const CH &getMinCH() const { return minCH; }
-
     const CH &getLocalMinCH() const { return localMinCH; }
 
     const std::vector<int32_t> &getLocalEliminationTree() const { return localEliminationTree; }
@@ -108,7 +98,6 @@ public:
     uint64_t sizeInBytes() const {
         uint64_t size = sizeof(CTNRMetric);
         size += cchMetric.sizeInBytes();
-//        size += minCH.sizeInBytes();
         size += localMinCH.sizeInBytes();
 
         return size;
@@ -159,7 +148,7 @@ private:
                                              const CH::SearchGraph &graph,
                                              const RankToIdx &rankToIdx,
                                              const std::vector<int32_t> &dataPos,
-                                             const std::vector<int32_t> &dataNodes,
+                                             const std::vector<ctnr::TransitNodeId> &dataNodes,
                                              CTNRData::DistanceVector<int32_t> &dataDistances) const {
         const int idx = rankToIdx(rv);
         const int startThis = dataPos[idx];
@@ -248,63 +237,6 @@ private:
         int nextUnexploredEdge; // The next unexplored incident edge.
     };
 
-    static void convertInTreeToOutTree(const std::vector<int> &parent,
-                                       std::vector<int> &firstChild,
-                                       std::vector<int> &children) {
-        const auto numVertices = parent.size();
-        // Build the elimination out-tree from the elimination in-tree.
-        firstChild = std::vector<int>(numVertices + 1);
-        children = std::vector<int>(numVertices - 1);
-        for (auto v = 0; v < numVertices; ++v) {
-            const auto p = parent[v];
-            if (p == -1 || p == v) // Root of tree may be marked by -1 or edge to self
-                continue;
-            ++firstChild[parent[v]];
-        }
-        auto firstEdge = 0; // The index of the first edge out of the current/next vertex.
-        for (auto v = 0; v <= numVertices; ++v) {
-            std::swap(firstEdge, firstChild[v]);
-            firstEdge += firstChild[v];
-        }
-        for (auto v = 0; v < numVertices; ++v) {
-            const auto p = parent[v];
-            if (p == -1 || p == v) // Root of tree may be marked by -1 or edge to self
-                continue;
-            children[firstChild[p]++] = v;
-        }
-        for (auto v = numVertices - 1; v > 0; --v)
-            firstChild[v] = firstChild[v - 1];
-        firstChild[0] = 0;
-    }
-
-    // Run a DFS for the given tree in out format.
-    // Call callbacks when recursing or backtracking.
-    template<typename RecurseCallBack,
-            typename BacktrackCallBack>
-    static void dfsOnTree(
-            const std::vector<int> &firstChild,
-            const std::vector<int> &children,
-            RecurseCallBack recurse,
-            BacktrackCallBack backtrack) {
-        const int numVertices = static_cast<int>(firstChild.size()) - 1;
-        std::stack<ActiveVertex, std::vector<ActiveVertex>> activeVertices;
-        activeVertices.emplace(numVertices - 1, firstChild[numVertices - 1]); // add root
-        while (!activeVertices.empty()) {
-            auto &v = activeVertices.top();
-            if (v.nextUnexploredEdge == firstChild[v.id + 1]) {
-                activeVertices.pop();
-                if (!activeVertices.empty())
-                    backtrack(v.id, activeVertices.top().id);
-                continue;
-            }
-            // Advance to next child
-            const auto child = children[v.nextUnexploredEdge];
-            recurse(v.id, child);
-            ++v.nextUnexploredEdge; // When backtracking from child later, look at next sibling
-            activeVertices.emplace(child, firstChild[child]);
-        }
-    }
-
     // Customize CCH including perfect customization and construct CH that only has edges required for the given metric.
     // CH is restricted to vertices below transit nodes, which is enough for local queries.
     CH customizeCCHAndBuildLocalMinCH(int64_t& cchBasicCustomizationTime, int64_t& cchPerfectCustomizationTime,
@@ -350,27 +282,12 @@ private:
         buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
 
         return ch;
-
-
-
-//        CH::SearchGraph subUpGraph = minCH.upwardGraph();
-//        CH::SearchGraph subDownGraph = minCH.downwardGraph();
-//        const auto eraseEdgeToTransitNode = [&](const int, const int v) {
-//            return hierarchy.isTransitNode(v);
-//        };
-//        subUpGraph.eraseEdges(eraseEdgeToTransitNode);
-//        subDownGraph.eraseEdges(eraseEdgeToTransitNode);
-//        KASSERT(subUpGraph.isDefrag() && subUpGraph.validate());
-//        KASSERT(subDownGraph.isDefrag() && subDownGraph.validate());
-//        return {std::move(subUpGraph), std::move(subDownGraph), minCH.getOrderPermutation(),
-//                minCH.getRanksPermutation()};
     }
 
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
     const std::vector<AccessNodeEdge> &accessNodeEdges;
     CCHMetric cchMetric;
-//    CH minCH;
 
     // Minimum CH restricted to non-transit nodes for local queries.
     CH localMinCH;

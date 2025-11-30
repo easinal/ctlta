@@ -11,6 +11,9 @@
 
 class TransitNodeHierarchy {
 
+    using SideId = uint64_t;
+    using TransitNodeId = ctnr::TransitNodeId;
+    using Level = ctnr::Level;
 public:
 
     TransitNodeHierarchy() = default;
@@ -58,7 +61,7 @@ public:
         return packedSideIds.size();
     }
 
-    int getTransitNodeThreshold() const {
+    ctnr::Level getTransitNodeThreshold() const {
         return transitNodeThreshold;
     }
 
@@ -70,12 +73,12 @@ public:
 
     // Given the ranks of two vertices in the CCH-order, returns the level of their lowest common ancestor
     // in the separator hierarchy.
-    int32_t getLevelOfLowestCommonAncestor(const int32_t &s, const int32_t &t) const {
+    Level getLevelOfLowestCommonAncestor(const int32_t &s, const int32_t &t) const {
 
-        const int minInputLevel = std::min(getVertexLevel(s), getVertexLevel(t));
+        const Level minInputLevel = std::min(getVertexLevel(s), getVertexLevel(t));
 
         // XOR packed side IDs to find out lowest common level in separator hierarchy.
-        const int l = lowestOneBit(packedSideIds[s] ^ packedSideIds[t]);
+        const Level l = static_cast<Level>(lowestOneBit(packedSideIds[s] ^ packedSideIds[t]));
 
         if (l >= 0)
             return std::min(l, minInputLevel);
@@ -94,12 +97,12 @@ public:
         return vertexLevel[v] < transitNodeThreshold;
     }
 
-    int32_t getRankOfTransitNodeIndex(const int32_t &index) const {
+    int32_t getRankOfTransitNodeIndex(const TransitNodeId &index) const {
         KASSERT(index >= 0 && index < transitNodes.size());
         return transitNodes[index];
     }
 
-    int32_t getTransitNodeIndexOfRank(const int32_t &v) const {
+    TransitNodeId getTransitNodeIndexOfRank(const int32_t &v) const {
         KASSERT(isTransitNode(v));
         KASSERT(transitNodeIndexOfRank[v] != -1);
         return transitNodeIndexOfRank[v];
@@ -118,7 +121,7 @@ public:
         return transitNodes;
     }
 
-    const std::vector<int32_t> &getRankOfTransitNodeIndex() const {
+    const std::vector<TransitNodeId> &getTransitNodeIndexOfRankVector() const {
         return transitNodeIndexOfRank;
     }
 
@@ -166,8 +169,8 @@ private:
     }
 
     static size_t computeSepDecompDepth(const SeparatorDecomposition &sd) {
-        uint32_t maxDepth = 0;
-        uint32_t curDepth = 1;
+        Level maxDepth = 0;
+        Level curDepth = 1;
         forEachSepDecompNodeInDfsOrder(sd,
                                        [&](const int, const int) {
                                            ++curDepth;
@@ -185,8 +188,8 @@ private:
 
         std::stack<bool> doneWithLeftChild;
         doneWithLeftChild.push(false);
-        uint32_t depth = 1;
-        uint64_t packedSideId = 0;
+        Level depth = 1;
+        SideId packedSideId = 0;
 
         // Set location info for root node separator vertices
         for (auto v = sd.lastSeparatorVertex(0) - 1; v >= sd.firstSeparatorVertex(0); --v) {
@@ -247,16 +250,16 @@ private:
     }
 
 
-    std::vector<uint64_t> packedSideIds; // store which side each vertex is on in each level of separator hierarchy
-    std::vector<uint32_t> vertexLevel; // Map rank in separator decomposition of reach vertex to its level in the SD
+    std::vector<SideId> packedSideIds; // store which side each vertex is on in each level of separator hierarchy
+    std::vector<Level> vertexLevel; // Map rank in separator decomposition of reach vertex to its level in the SD
 
     // The small subset of vertices in the transitNodeThreshold highest levels make up the transit nodes.
     // Every transit node gets an internal index in [0, numTransitNodes-1] for distance table lookup.
     // We identify transit nodes by this index.
     // To map the CCH-rank of a transit node r  to its index i, use i = transitNodeToDistanceTableIndex[r].
     // To map a transit node index i to the CCH-rank r of the associated vertex, use r = transitNodes[i].
-    int transitNodeThreshold;
+    Level transitNodeThreshold;
     std::vector<int32_t> transitNodes; // List of vertices in the top transitNodeThreshold levels which make up transit nodes
-    std::vector<int32_t> transitNodeIndexOfRank; // maps CCH rank to index in transitNodes
+    std::vector<TransitNodeId > transitNodeIndexOfRank; // maps CCH rank to index in transitNodes
 };
 

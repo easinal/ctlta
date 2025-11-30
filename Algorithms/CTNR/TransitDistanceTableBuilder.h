@@ -36,10 +36,10 @@ private:
     void runTransitSSSP(const int sourceTransitIndex,
                         CTNRData &data ) const {
         const auto &transitIdToVertexId = hierarchy.getTransitNodes();
-        const auto &vertexIdToTransitId = hierarchy.getRankOfTransitNodeIndex();
+        const auto &vertexIdToTransitId = hierarchy.getTransitNodeIndexOfRankVector();
 //        const auto &downGraph = minCH.downwardGraph();
         using PQEntry = std::pair<int32_t, int32_t>;
-        std::priority_queue<PQEntry, std::vector<PQEntry>, std::greater<PQEntry>> pq;
+        std::priority_queue<PQEntry, std::vector<PQEntry>, std::greater<>> pq;
         const int sourceVertexId = transitIdToVertexId[sourceTransitIndex];
         data.setDistanceBetweenTransitNodes(sourceTransitIndex, sourceTransitIndex, 0);
         pq.emplace(0, sourceVertexId);

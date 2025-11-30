@@ -70,8 +70,9 @@ public:
 
     uint64_t sizeInBytes() const {
         uint64_t size = sizeof(CTNRPreprocessor);
-        size += elimTreeFirstChild.size() * sizeof(int);
-        size += elimTreeChildren.size() * sizeof(int);
+        size += elimTreeFirstChild.size() * sizeof(decltype(elimTreeFirstChild)::value_type);
+        size += elimTreeChildren.size() * sizeof(decltype(elimTreeChildren)::value_type);
+        size += accessNodeEdges.size() * sizeof(decltype(accessNodeEdges)::value_type);
         return size;
     }
 
@@ -196,7 +197,7 @@ private:
     }
 
     template<typename GraphT, typename RankToIdxT>
-    void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos, std::vector<int32_t> &entries,
+    void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos, std::vector<ctnr::TransitNodeId> &entries,
                                            const GraphT &upGraph,
                                            const RankToIdxT &rankToIdx) {
 
@@ -224,7 +225,7 @@ private:
                 const int neighbor = upGraph.edgeHead(e);
                 if (!hierarchy.isTransitNode(neighbor))
                     continue;
-                const int node = hierarchy.getTransitNodeIndexOfRank(neighbor);
+                const ctnr::TransitNodeId node = hierarchy.getTransitNodeIndexOfRank(neighbor);
                 int i = 0;
                 for (; i < curNumEntries[childIdx]; ++i) {
                     if (entries[startChild + i] == node) {

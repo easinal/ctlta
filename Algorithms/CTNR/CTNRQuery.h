@@ -25,7 +25,7 @@ public:
 
     // Main query method (s, t are rank IDs)
     int32_t run(int32_t s, int32_t t) {
-        const auto lcaLevel = hierarchy.getLevelOfLowestCommonAncestor(s, t);
+        const ctnr::Level lcaLevel = hierarchy.getLevelOfLowestCommonAncestor(s, t);
         int32_t dist = runTransitNodeQuery(s, t);
         if (lcaLevel >= hierarchy.getTransitNodeThreshold()) {
             lastModeIsLocal = true;
@@ -76,10 +76,10 @@ private:
             return dist;
         }
         if (sIsTransit) {
-            const int32_t nodeS = hierarchy.getTransitNodeIndexOfRank(s);
+            const ctnr::TransitNodeId nodeS = hierarchy.getTransitNodeIndexOfRank(s);
             const auto numAccessT = accessNodesT.size();
             for (auto j = 0; j < numAccessT; ++j) {
-                const int32_t nodeT = accessNodesT[j];
+                const ctnr::TransitNodeId nodeT = accessNodesT[j];
                 const int32_t distT = accessDistancesT[j];
                 const int32_t mid = data.getDistanceBetweenTransitNodes(nodeS, nodeT);
                 const int32_t total = mid + distT;
@@ -89,10 +89,10 @@ private:
             return minDist;
         }
         if (tIsTransit) {
-            const int32_t nodeT = hierarchy.getTransitNodeIndexOfRank(t);
+            const ctnr::TransitNodeId nodeT = hierarchy.getTransitNodeIndexOfRank(t);
             const auto numAccessS = accessNodesS.size();
             for (auto i = 0; i < numAccessS; ++i) {
-                const int32_t nodeS = accessNodesS[i];
+                const ctnr::TransitNodeId nodeS = accessNodesS[i];
                 const int32_t distS = accessDistancesS[i];
                 const int32_t mid = data.getDistanceBetweenTransitNodes(nodeS, nodeT);
                 const int32_t total = distS + mid;
@@ -105,12 +105,12 @@ private:
         const auto numAccessS = accessNodesS.size();
         const auto numAccessT = accessNodesT.size();
         for (auto i = 0; i < numAccessS; ++i) {
-            const int32_t nodeS = accessNodesS[i];
+            const ctnr::TransitNodeId nodeS = accessNodesS[i];
             const int32_t distS = accessDistancesS[i];
             if (distS >= minDist) continue;
 
             for (auto j = 0; j < numAccessT; ++j) {
-                const int32_t nodeT = accessNodesT[j];
+                const ctnr::TransitNodeId nodeT = accessNodesT[j];
                 const int32_t distT = accessDistancesT[j];
 //                if (distT >= CTNR_INFTY) continue;
 //                if (distS + distT >= minDist) continue;

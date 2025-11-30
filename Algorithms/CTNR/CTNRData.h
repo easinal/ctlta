@@ -33,11 +33,11 @@ public:
 
     // Input: Internal transit node index of access nodes.
     DEBUG_NOINLINE
-    int getDistanceBetweenTransitNodes(int32_t indexS, int32_t indexT) const {
+    int getDistanceBetweenTransitNodes(ctnr::TransitNodeId indexS, ctnr::TransitNodeId indexT) const {
         return distanceTable[indexS * numTransitNodes + indexT];
     }
 
-    ConstantVectorRange<int32_t> getAccessNodes(const int v) const {
+    ConstantVectorRange<ctnr::TransitNodeId> getAccessNodes(const int v) const {
         return {accessNodes.begin() + pos[rankToIdx(v)], accessNodes.begin() + pos[rankToIdx(v) + 1]};
     }
 
@@ -54,7 +54,7 @@ public:
         uint64_t size = sizeof(CTNRData);
 
         size += pos.size() * sizeof(int32_t);
-        size += accessNodes.size() * sizeof(int32_t);
+        size += accessNodes.size() * sizeof(ctnr::TransitNodeId);
         size += forwardDistances.size() * sizeof(int32_t);
         size += backwardDistances.size() * sizeof(int32_t);
         size += distanceTable.size() * sizeof(int32_t);
@@ -67,10 +67,10 @@ public:
     }
 
     uint64_t sizeAccessNodesInBytes() const {
-        return pos.size() * sizeof(int32_t) +
-               accessNodes.size() * sizeof(int32_t) +
-               forwardDistances.size() * sizeof(int32_t) +
-               backwardDistances.size() * sizeof(int32_t);
+        return pos.size() * sizeof(decltype(pos)::value_type) +
+               accessNodes.size() * sizeof(decltype(accessNodes)::value_type) +
+               forwardDistances.size() * sizeof(decltype(forwardDistances)::value_type) +
+               backwardDistances.size() * sizeof(decltype(backwardDistances)::value_type);
     }
 
 private:
@@ -86,7 +86,7 @@ private:
     }
 
     // Input: Internal transit node index of access nodes.
-    void setDistanceBetweenTransitNodes(int32_t indexS, int32_t indexT, int32_t distance) {
+    void setDistanceBetweenTransitNodes(ctnr::TransitNodeId indexS, ctnr::TransitNodeId indexT, int32_t distance) {
         distanceTable[indexS * numTransitNodes + indexT] = distance;
     }
 
@@ -94,12 +94,12 @@ private:
     friend class CTNRPreprocessor;
     friend class TransitDistanceTableBuilder;
 
-    int numTransitNodes;
+    ctnr::TransitNodeId numTransitNodes;
     int numVertices;
 
     // Range of access nodes for vertex v is stored in accessNodes[pos[v]..pos[v+1]-1]
     std::vector<int32_t> pos;
-    std::vector<int32_t> accessNodes;
+    std::vector<ctnr::TransitNodeId> accessNodes;
 
     DistanceVector<int32_t> forwardDistances;
     DistanceVector<int32_t> backwardDistances;
