@@ -137,9 +137,10 @@ private:
         while (!activeVertices.empty()) {
             auto &v = activeVertices.top();
             if (v.nextUnexploredEdge == firstChild[v.id + 1]) {
+                const int vId = v.id; // save before pop
                 activeVertices.pop();
                 if (!activeVertices.empty())
-                    backtrack(v.id, activeVertices.top().id);
+                    backtrack(vId, activeVertices.top().id);
                 continue;
             }
             // Advance to next child

@@ -354,11 +354,12 @@ inline void runQueries(const CommandLineParser &clp) {
         // Build CCH and tree hierarchy
         CCH cch;
         cch.preprocess(graph, sepDecomp);
+        std::cout<<"Finished CCH preprocessing"<<std::endl;
 
         const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
         TransitNodeHierarchy hierarchy;
         hierarchy.preprocess(graph, sepDecomp, levelThreshold); // first levelThreshold levels are transit nodes
-
+        std::cout<<"Finished TransitNodeHierarchy preprocessing"<<std::endl;
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
         CTNRPreprocessor preprocessor(hierarchy, cch);
@@ -366,10 +367,10 @@ inline void runQueries(const CommandLineParser &clp) {
 
         // Preprocess CTNR
         preprocessor.preprocess(data);
-
+        std::cout<<"Finished CTNRPreprocessor preprocessing"<<std::endl;
         // Customize CTNR
         metric.customize(data);
-        
+        std::cout<<"Finished CTNRMetric customization"<<std::endl;
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
         // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
