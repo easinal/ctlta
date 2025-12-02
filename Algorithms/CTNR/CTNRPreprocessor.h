@@ -89,8 +89,8 @@ private:
         ActiveVertex(const int id, const int nextUnexploredEdge)
                 : id(id), nextUnexploredEdge(nextUnexploredEdge) {}
 
-        int id;                 // The ID of the active vertex.
-        int nextUnexploredEdge; // The next unexplored incident edge.
+        int id = INVALID_ID;                 // The ID of the active vertex.
+        int nextUnexploredEdge = INVALID_EDGE; // The next unexplored incident edge.
     };
 
     static void convertInTreeToOutTree(const std::vector<int> &parent,
