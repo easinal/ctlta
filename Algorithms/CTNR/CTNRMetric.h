@@ -88,6 +88,9 @@ public:
                                                            cchConstructChTime + accessNodeComputationTime +
                                                            distanceTableComputationTime + buildLocalMinCHTime)
                   << " microseconds." << std::endl;
+        const auto [avgNumNonInftyForward, avgNumNonInftyBackward] = computeAverageNumberOfNonInftyAccessNodes(data);
+        std::cout << "CTNR: Average number of non-infinity forward/backward distances per vertex: "
+                  << avgNumNonInftyForward << "/" << avgNumNonInftyBackward << std::endl;
     }
 
     const CH &getLocalMinCH() const { return localMinCH; }
@@ -282,6 +285,28 @@ private:
         buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
 
         return ch;
+    }
+
+    std::pair<double, double> computeAverageNumberOfNonInftyAccessNodes(const CTNRData &data) const {
+        int64_t fSum = 0;
+        int64_t bSum = 0;
+        int64_t count = 0;
+        const auto &cchGraph = cch.getUpwardGraph();
+        FORALL_VERTICES(cchGraph, rv) {
+            const int idx = data.rankToIdx(rv);
+            int localFCount = 0;
+            int localBCount = 0;
+            for (auto i = data.pos[idx]; i < data.pos[idx + 1]; ++i) {
+                if (data.forwardDistances[i] != CTNR_INFTY)
+                    localFCount++;
+                if (data.backwardDistances[i] != CTNR_INFTY)
+                    localBCount++;
+            }
+            fSum += localFCount;
+            bSum += localBCount;
+            count++;
+        }
+        return {static_cast<double>(fSum) / count, static_cast<double>(bSum) / count};
     }
 
     const TransitNodeHierarchy &hierarchy;
