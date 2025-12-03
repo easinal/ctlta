@@ -73,6 +73,26 @@ public:
                backwardDistances.size() * sizeof(decltype(backwardDistances)::value_type);
     }
 
+    std::pair<double, double> computeAverageNumberOfNonInftyAccessNodes() const {
+        int64_t fSum = 0;
+        int64_t bSum = 0;
+        int64_t count = 0;
+        for (int idx = 0; idx < numVertices; ++idx) {
+            int localFCount = 0;
+            int localBCount = 0;
+            for (auto i = pos[idx]; i < pos[idx + 1]; ++i) {
+                if (forwardDistances[i] != CTNR_INFTY)
+                    localFCount++;
+                if (backwardDistances[i] != CTNR_INFTY)
+                    localBCount++;
+            }
+            fSum += localFCount;
+            bSum += localBCount;
+            count++;
+        }
+        return {static_cast<double>(fSum) / count, static_cast<double>(bSum) / count};
+    }
+
 private:
 
     // Get internal vertex index for CCH rank r.
@@ -90,7 +110,6 @@ private:
         distanceTable[indexS * numTransitNodes + indexT] = distance;
     }
 
-    template<ctnr::AccessNodePruning>
     friend class CTNRMetric;
     friend class CTNRPreprocessor;
     friend class TransitDistanceTableBuilder;

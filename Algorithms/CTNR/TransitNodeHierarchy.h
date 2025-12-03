@@ -61,12 +61,12 @@ public:
         return packedSideIds.size();
     }
 
-    ctnr::Level getTransitNodeThreshold() const {
+    Level getTransitNodeThreshold() const {
         return transitNodeThreshold;
     }
 
     // Given the rank of a vertex in the CCH-order, returns its level in the separator hierarchy.
-    inline uint32_t getVertexLevel(const int32_t &v) const {
+    inline Level getVertexLevel(const int32_t &v) const {
         KASSERT(v >= 0 && v < vertexLevel.size());
         return vertexLevel[v];
     }

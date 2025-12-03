@@ -24,7 +24,6 @@
 #include <boost/dynamic_bitset.hpp>
 
 
-template<ctnr::AccessNodePruning Pruning = ctnr::AccessNodePruning::None>
 class CTNRMetric {
 
 public:
@@ -32,8 +31,10 @@ public:
     // Constructor
     CTNRMetric(const TransitNodeHierarchy &hierarchy, const CCH &cch,
                const std::vector<AccessNodeEdge> &accessNodeEdges,
-               const int32_t *const inputWeights)
+               const int32_t *const inputWeights,
+               const ctnr::Level pruneLevelThreshold = 0)
             : hierarchy(hierarchy), cch(cch), accessNodeEdges(accessNodeEdges),
+              pruneLevelThreshold(pruneLevelThreshold),
               cchMetric(cch, inputWeights),
               localEliminationTree(cch.getEliminationTree()) {
 
@@ -65,32 +66,9 @@ public:
         computeAccessNodes(data);
         accessNodeComputationTime = timer.elapsed<std::chrono::microseconds>();
 
-//        // Debug information
-//        int64_t sumNonInftyAfterPruningForward = 0;
-//        int64_t sumNonInftyAfterPruningBackward = 0;
-//        for (int32_t rv = 0; rv < cch.getUpwardGraph().numVertices(); ++rv) {
-//            const int idx = data.rankToIdx(rv);
-//            for (auto i = data.pos[idx]; i < data.pos[idx + 1]; ++i) {
-//                if (data.forwardDistances[i] != CTNR_INFTY)
-//                    sumNonInftyAfterPruningForward++;
-//                if (data.backwardDistances[i] != CTNR_INFTY)
-//                    sumNonInftyAfterPruningBackward++;
-//            }
-//        }
-//
-//        std::cout << "CTNR: Average number of non-infinity forward distances per vertex: "
-//                  << static_cast<double>(sumNonInftyAfterPruningForward) / cch.getUpwardGraph().numVertices()
-//                  << std::endl;
-//        std::cout << "CTNR: Average number of non-infinity backward distances per vertex: "
-//                  << static_cast<double>(sumNonInftyAfterPruningBackward) / cch.getUpwardGraph().numVertices()
-//                  << std::endl;
-
         std::cout << "Finished CTNR customization in " << (cchBasicCustomizationTime + distanceTableComputationTime +
                                                            accessNodeComputationTime)
                   << " microseconds." << std::endl;
-//        const auto [avgNumNonInftyForward, avgNumNonInftyBackward] = computeAverageNumberOfNonInftyAccessNodes(data);
-//        std::cout << "CTNR: Average number of non-infinity forward/backward distances per vertex: "
-//                  << avgNumNonInftyForward << "/" << avgNumNonInftyBackward << std::endl;
     }
 
     const std::vector<int32_t> &getLocalEliminationTree() const { return localEliminationTree; }
@@ -127,6 +105,7 @@ private:
         }
 
 
+        std::cout << "Pruning access nodes for vertices of level < " << (int) pruneLevelThreshold << std::endl;
         // TODO: Debug for USA network
         const auto &cchGraph = cch.getUpwardGraph();
 #pragma omp parallel
@@ -141,11 +120,13 @@ private:
             // Prune access nodes for this metric based on domination between access nodes.
             // Important to do this in the top-down sweep since already pruned upper neighbors lead to fewer
             // relevant access nodes at this vertex, which decreases the amount of work for pruning at this vertex.
-            if constexpr (Pruning == ctnr::AccessNodePruning::Full) {
-                const int idx = data.rankToIdx(rv);
-                fullPruneAccessNodesForVertex<true>(idx, data.pos, data.accessNodes, data.forwardDistances, data);
-                fullPruneAccessNodesForVertex<false>(idx, data.pos, data.accessNodes, data.backwardDistances, data);
-            }
+            // Set pruneLevelThreshold to balance number of non-infinity access nodes for better query time and
+            // customization time.
+            if (hierarchy.getVertexLevel(rv) >= pruneLevelThreshold)
+                return;
+            const int idx = data.rankToIdx(rv);
+            fullPruneAccessNodesForVertex<true>(idx, data.pos, data.accessNodes, data.forwardDistances, data);
+            fullPruneAccessNodesForVertex<false>(idx, data.pos, data.accessNodes, data.backwardDistances, data);
         });
     }
 
@@ -233,31 +214,10 @@ private:
         builder.buildDistanceTable(data);
     }
 
-    std::pair<double, double> computeAverageNumberOfNonInftyAccessNodes(const CTNRData &data) const {
-        int64_t fSum = 0;
-        int64_t bSum = 0;
-        int64_t count = 0;
-        const auto &cchGraph = cch.getUpwardGraph();
-        FORALL_VERTICES(cchGraph, rv) {
-            const int idx = data.rankToIdx(rv);
-            int localFCount = 0;
-            int localBCount = 0;
-            for (auto i = data.pos[idx]; i < data.pos[idx + 1]; ++i) {
-                if (data.forwardDistances[i] != CTNR_INFTY)
-                    localFCount++;
-                if (data.backwardDistances[i] != CTNR_INFTY)
-                    localBCount++;
-            }
-            fSum += localFCount;
-            bSum += localBCount;
-            count++;
-        }
-        return {static_cast<double>(fSum) / count, static_cast<double>(bSum) / count};
-    }
-
     const TransitNodeHierarchy &hierarchy;
     const CCH &cch;
     const std::vector<AccessNodeEdge> &accessNodeEdges;
+    const ctnr::Level pruneLevelThreshold;
     CCHMetric cchMetric;
 
     // Minimum CH restricted to non-transit nodes for local queries.

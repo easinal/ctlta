@@ -72,6 +72,7 @@ inline void printUsage() {
               "  -d <file>         file that contains OD pairs (queries)\n"
               "  -o <file>         place output in <file>\n"
               "  -ctnr-thresh <num>  transit node level threshold (default: 5)\n"
+              "  -ctnr-prune-thresh <num>  access node pruning level threshold. Set to 0 for no pruning, to 127 for full pruning or to a value > ctnr-thresh for partial pruning (default: 0)\n"
               "  -help             display this help and exit\n";
 }
 
@@ -360,13 +361,7 @@ inline void runQueries(const CommandLineParser &clp) {
 //        std::cout << "Finished CCH preprocessing" << std::endl;
 
         const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
-        static constexpr ctnr::AccessNodePruning PruningMode =
-#if CTNR_PRUNING == CTNR_PRUNING_FULL
-                ctnr::AccessNodePruning::Full
-#else
-                ctnr::AccessNodePruning::None
-#endif
-        ;
+        int pruneThreshold = clp.getValue<int>("ctnr-prune-thresh", 0);
 
         TransitNodeHierarchy hierarchy;
         hierarchy.preprocess(graph, sepDecomp, levelThreshold); // first levelThreshold levels are transit nodes
@@ -374,8 +369,8 @@ inline void runQueries(const CommandLineParser &clp) {
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
         CTNRPreprocessor preprocessor(hierarchy, cch);
-        CTNRMetric<PruningMode> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
-                                       useLengths ? &graph.length(0) : &graph.travelTime(0));
+        CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+                                       useLengths ? &graph.length(0) : &graph.travelTime(0), pruneThreshold);
 
         // Preprocess CTNR
         preprocessor.preprocess(data);
@@ -674,14 +669,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
 
 
         const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
-        static constexpr ctnr::AccessNodePruning PruningMode =
-#if CTNR_PRUNING == CTNR_PRUNING_FULL
-                ctnr::AccessNodePruning::Full
-#else
-                ctnr::AccessNodePruning::None
-#endif
-        ;
-
+        int pruneThreshold = clp.getValue<int>("ctnr-prune-thresh", 0);
 
         Timer timer;
         // Build CCH and tree hierarchy
@@ -700,16 +688,21 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
 
         outputFile
-                << "cch_basic_customization,distance_table_computation,access_node_computation,total_time\n";
+                << "cch_basic_customization,distance_table_computation,access_node_computation,total_time,avg_noninfty_dists_forw,avg_noninfty_dists_backw\n";
         int64_t cchBasicCustom, distTableComp, accessNodeComp, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
-            CTNRMetric<PruningMode> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
-                                           useLengths ? &graph.length(0) : &graph.travelTime(0));
+            CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+                                           useLengths ? &graph.length(0) : &graph.travelTime(0), pruneThreshold);
             timer.restart();
             metric.customizeWithMeasurements(data, cchBasicCustom, distTableComp, accessNodeComp);
             tot = timer.elapsed<std::chrono::microseconds>();
-            outputFile << cchBasicCustom << ',' << distTableComp << ',' << accessNodeComp << ',' << tot << '\n';
+            const auto [avgNumNonInftyForward, avgNumNonInftyBackward] = data.computeAverageNumberOfNonInftyAccessNodes();
+            std::cout << "CTNR: Average number of non-infinity forward/backward distances per vertex: "
+                      << avgNumNonInftyForward << "/" << avgNumNonInftyBackward << std::endl;
+            outputFile << cchBasicCustom << ',' << distTableComp << ',' << accessNodeComp << ',' << tot
+                       << ',' << avgNumNonInftyForward << ',' << avgNumNonInftyBackward << '\n';
+
         }
     } else if (algorithmName == "CTL-custom") {
 

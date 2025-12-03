@@ -17,7 +17,6 @@
 #include "Tools/Constants.h"
 #include "Tools/Workarounds.h"
 #include "Tools/Timer.h"
-#include "Algorithms/CTNR/CTNRConstants.h"
 
 // This class encodes the actual cost of the edges in a customizable contraction hierarchy. It
 // stores the edge weights and contains several sequential and parallel customization algorithms.
@@ -100,7 +99,6 @@ class CCHMetric {
 
  private:
 
-    template<ctnr::AccessNodePruning>
     friend class CTNRMetric;
 
   // Computes a respecting metric.
