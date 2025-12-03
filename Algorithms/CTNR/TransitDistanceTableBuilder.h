@@ -13,10 +13,12 @@ class TransitDistanceTableBuilder {
 public:
     TransitDistanceTableBuilder(const TransitNodeHierarchy &hierarchy,
                                 const CCH::UpGraph &cchGraph,
+                                const std::vector<int32_t>& eliminationTree,
                                 int32_t const * const upWeights,
                                 int32_t const * const downWeights)
             : hierarchy(hierarchy),
               cchGraph(cchGraph),
+              eliminationTree(eliminationTree),
               upWeights(upWeights),
               downWeights(downWeights) {}
 
@@ -37,47 +39,41 @@ private:
                         CTNRData &data ) const {
         const auto &transitIdToVertexId = hierarchy.getTransitNodes();
         const auto &vertexIdToTransitId = hierarchy.getTransitNodeIndexOfRankVector();
-//        const auto &downGraph = minCH.downwardGraph();
-        using PQEntry = std::pair<int32_t, int32_t>;
-        std::priority_queue<PQEntry, std::vector<PQEntry>, std::greater<>> pq;
         const int sourceVertexId = transitIdToVertexId[sourceTransitIndex];
-        data.setDistanceBetweenTransitNodes(sourceTransitIndex, sourceTransitIndex, 0);
-        pq.emplace(0, sourceVertexId);
-        while (!pq.empty()) {
-            const auto [d, u] = pq.top();
-            pq.pop();
-            if (d != data.getDistanceBetweenTransitNodes(sourceTransitIndex, vertexIdToTransitId[u]))
-                continue;
+        int* distanceTableRow = data.getDistanceTableRow(sourceTransitIndex);
+        distanceTableRow[sourceTransitIndex] = 0;
+        int u = sourceVertexId;
+        while (u != INVALID_VERTEX) {
+            const int32_t d = distanceTableRow[vertexIdToTransitId[u]];
             FORALL_INCIDENT_EDGES(cchGraph, u, e) {
                 const int v = cchGraph.edgeHead(e);
                 const int neighborTransitIndex = vertexIdToTransitId[v];
                 const int32_t w = upWeights[e];
-                if (w == INFTY)
-                    continue;
                 const int32_t nd = d + w;
-                if (nd < data.getDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex)) {
-                    data.setDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex, nd);
-                    pq.emplace(nd, v);
+                if (nd < distanceTableRow[neighborTransitIndex]) {
+                    distanceTableRow[neighborTransitIndex] = nd;
                 }
             }
+            u = eliminationTree[u];
         }
+
         for (int i = hierarchy.numTransitNodes() - 1; i >= 0; --i) {
             const int u = transitIdToVertexId[i];
             FORALL_INCIDENT_EDGES(cchGraph, u, e) {
                 const int neighborTransitIndex = vertexIdToTransitId[cchGraph.edgeHead(e)];
                 const int32_t w = downWeights[e];
-                const int32_t vd = data.getDistanceBetweenTransitNodes(sourceTransitIndex, neighborTransitIndex);
-                if (w == INFTY || vd == INFTY)
-                    continue;
+                const int32_t vd = distanceTableRow[neighborTransitIndex];
                 const int32_t nd = vd + w;
-                if (nd < data.getDistanceBetweenTransitNodes(sourceTransitIndex, i))
-                    data.setDistanceBetweenTransitNodes(sourceTransitIndex, i, nd);
+                if (nd < distanceTableRow[i]) {
+                    distanceTableRow[i] = nd;
+                }
             }
         }
     }
 
     const TransitNodeHierarchy &hierarchy;
     const CCH::UpGraph &cchGraph;
+    const std::vector<int32_t> &eliminationTree;
     int32_t const * const upWeights;
     int32_t const * const downWeights;
 };

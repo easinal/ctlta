@@ -209,8 +209,8 @@ private:
 
     void computeDistanceTable(CTNRData &data) {
         // TODO: implement minCH for only transit node subgraph to use in distance table computation instead of CCH graph?
-        TransitDistanceTableBuilder builder(hierarchy, cch.getUpwardGraph(), cchMetric.upwardWeights(),
-                                            cchMetric.downwardWeights());
+        TransitDistanceTableBuilder builder(hierarchy, cch.getUpwardGraph(), cch.getEliminationTree(),
+                                            cchMetric.upwardWeights(), cchMetric.downwardWeights());
         builder.buildDistanceTable(data);
     }
 

@@ -27,14 +27,14 @@ class CTNRData {
 public:
 
     explicit CTNRData(const int numTransitNodes, const int numVertices) :
-    numTransitNodes(numTransitNodes),
-    numVertices(numVertices),
-    distanceTable(numTransitNodes * numTransitNodes, CTNR_INFTY) {}
+            distanceTableRowSize(numTransitNodes),
+            numVertices(numVertices),
+            distanceTable(distanceTableRowSize * distanceTableRowSize, CTNR_INFTY) {}
 
     // Input: Internal transit node index of access nodes.
     DEBUG_NOINLINE
     int getDistanceBetweenTransitNodes(ctnr::TransitNodeId indexS, ctnr::TransitNodeId indexT) const {
-        return distanceTable[indexS * numTransitNodes + indexT];
+        return distanceTable[indexS * distanceTableRowSize + indexT];
     }
 
     ConstantVectorRange<ctnr::TransitNodeId> getAccessNodes(const int v) const {
@@ -98,23 +98,29 @@ private:
     // Get internal vertex index for CCH rank r.
     // Invert ranks for sequential writing order during top-down access node construction.
     inline int rankToIdx(const int r) const {
-        return numVertices - 1 - r ;
+        return numVertices - 1 - r;
     }
 
     void resetDistanceTable() {
-        distanceTable.assign(numTransitNodes * numTransitNodes, CTNR_INFTY);
+        distanceTable.assign(distanceTableRowSize * distanceTableRowSize, CTNR_INFTY);
     }
 
     // Input: Internal transit node index of access nodes.
     void setDistanceBetweenTransitNodes(ctnr::TransitNodeId indexS, ctnr::TransitNodeId indexT, int32_t distance) {
-        distanceTable[indexS * numTransitNodes + indexT] = distance;
+        distanceTable[indexS * distanceTableRowSize + indexT] = distance;
+    }
+
+    int32_t *getDistanceTableRow(ctnr::TransitNodeId indexS) {
+        return &distanceTable[indexS * distanceTableRowSize];
     }
 
     friend class CTNRMetric;
+
     friend class CTNRPreprocessor;
+
     friend class TransitDistanceTableBuilder;
 
-    ctnr::TransitNodeId numTransitNodes;
+    ctnr::TransitNodeId distanceTableRowSize;
     int numVertices;
 
     // Range of access nodes for vertex v is stored in accessNodes[pos[v]..pos[v+1]-1]
@@ -124,9 +130,9 @@ private:
     DistanceVector<int32_t> forwardDistances;
     DistanceVector<int32_t> backwardDistances;
 
-    // distanceTable[i * numTransitNodes + j] = distance from transit node i to transit node j, where i and j are
+    // distanceTable[i * distanceTableRowSize + j] = distance from transit node i to transit node j, where i and j are
     // internal transit node indices.
-    std::vector<int32_t> distanceTable;
+    DistanceVector<int32_t> distanceTable;
 
 
 };
