@@ -357,24 +357,32 @@ inline void runQueries(const CommandLineParser &clp) {
         // Build CCH and tree hierarchy
         CCH cch;
         cch.preprocess(graph, sepDecomp);
-        std::cout << "Finished CCH preprocessing" << std::endl;
+//        std::cout << "Finished CCH preprocessing" << std::endl;
 
         const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
+        static constexpr ctnr::AccessNodePruning PruningMode =
+#if CTNR_PRUNING == CTNR_PRUNING_FULL
+                ctnr::AccessNodePruning::Full
+#else
+                ctnr::AccessNodePruning::None
+#endif
+        ;
+
         TransitNodeHierarchy hierarchy;
         hierarchy.preprocess(graph, sepDecomp, levelThreshold); // first levelThreshold levels are transit nodes
-        std::cout << "Finished TransitNodeHierarchy preprocessing" << std::endl;
+//        std::cout << "Finished TransitNodeHierarchy preprocessing" << std::endl;
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
         CTNRPreprocessor preprocessor(hierarchy, cch);
-        CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
-                          useLengths ? &graph.length(0) : &graph.travelTime(0));
+        CTNRMetric<PruningMode> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+                                       useLengths ? &graph.length(0) : &graph.travelTime(0));
 
         // Preprocess CTNR
         preprocessor.preprocess(data);
-        std::cout << "Finished CTNRPreprocessor preprocessing" << std::endl;
+        std::cout << "Finished preprocessing" << std::endl;
         // Customize CTNR
         metric.customize(data);
-        std::cout << "Finished CTNRMetric customization" << std::endl;
+//        std::cout << "Finished CTNRMetric customization" << std::endl;
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
         // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
@@ -666,6 +674,14 @@ inline void runPreprocessing(const CommandLineParser &clp) {
 
 
         const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
+        static constexpr ctnr::AccessNodePruning PruningMode =
+#if CTNR_PRUNING == CTNR_PRUNING_FULL
+                ctnr::AccessNodePruning::Full
+#else
+                ctnr::AccessNodePruning::None
+#endif
+        ;
+
 
         Timer timer;
         // Build CCH and tree hierarchy
@@ -684,18 +700,16 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
 
         outputFile
-                << "cch_basic_customization,cch_perfect_customization,cch_build_ch,access_node_computation,distance_table_computation,local_min_ch_construction,total_time\n";
-        int64_t cchBasicCustom, cchPerfectCustom, cchBuildCH, accessNodeComp, distTableComp, buildLocalMinCH, tot;
+                << "cch_basic_customization,distance_table_computation,access_node_computation,total_time\n";
+        int64_t cchBasicCustom, distTableComp, accessNodeComp, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
-            CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
-                              useLengths ? &graph.length(0) : &graph.travelTime(0));
+            CTNRMetric<PruningMode> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+                                           useLengths ? &graph.length(0) : &graph.travelTime(0));
             timer.restart();
-            metric.customizeWithMeasurements(data, cchBasicCustom, cchPerfectCustom, cchBuildCH, accessNodeComp,
-                                             distTableComp, buildLocalMinCH);
+            metric.customizeWithMeasurements(data, cchBasicCustom, distTableComp, accessNodeComp);
             tot = timer.elapsed<std::chrono::microseconds>();
-            outputFile << cchBasicCustom << ',' << cchPerfectCustom << ',' << cchBuildCH << ',' << accessNodeComp << ','
-                       << distTableComp << ',' << buildLocalMinCH << ',' << tot << '\n';
+            outputFile << cchBasicCustom << ',' << distTableComp << ',' << accessNodeComp << ',' << tot << '\n';
         }
     } else if (algorithmName == "CTL-custom") {
 

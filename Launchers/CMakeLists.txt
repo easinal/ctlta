@@ -20,6 +20,23 @@ endif()
 #  set(VAL_CTL_STORE_PATH_POINTERS "false")
 #endif()
 
+# Compile time parameters for the CTNR shortest path algorithm
+set(CTNR_PRUNING_CODE_NONE 0)
+set(CTNR_PRUNING_CODE_FULL 1)
+set(CTNR_PRUNING_VALUES None Full)
+
+set(CTNR_PRUNING None CACHE STRING "Choose the pruning mode for CTNR. Possible Values: None, Full.")
+set_property(CACHE CTNR_PRUNING PROPERTY STRINGS ${CTNR_PRUNING_VALUES})
+list(FIND CTNR_PRUNING_VALUES ${CTNR_PRUNING} index)
+if (index EQUAL -1)
+  message(FATAL_ERROR "CTNR_PRUNING must be one of ${CTNR_PRUNING_VALUES}")
+endif ()
+
+set(CTNR_PRUNING_CODE ${CTNR_PRUNING_CODE_NONE})
+if (${CTNR_PRUNING} STREQUAL Full)
+    set(CTNR_PRUNING_CODE ${CTNR_PRUNING_CODE_FULL})
+endif ()
+
 # AssignTraffic target
 add_executable(AssignTraffic AssignTraffic.cc)
 target_compile_definitions(AssignTraffic PRIVATE CSV_IO_NO_THREAD)
@@ -54,7 +71,8 @@ endif()
 target_compile_definitions(AssignTraffic PRIVATE CTL_THETA=${VAL_CTL_THETA})
 target_compile_definitions(AssignTraffic PRIVATE CTL_SIMD_LOGK=${VAL_CTL_SIMD_LOGK})
 target_compile_definitions(AssignTraffic PRIVATE CTL_USE_PERFECT_CUSTOMIZATION=${VAL_CTL_USE_PERFECT_CUSTOMIZATION})
-#target_compile_definitions(AssignTraffic PRIVATE CTL_STORE_PATH_POINTERS=${VAL_CTL_STORE_PATH_POINTERS})
+#target_compile_definitions(AssignTraffic PRIVATE CTL_STORE_PATH_POINTERS=${VAL_CTL_STORE_PATH_POINTERS}
+target_compile_definitions(AssignTraffic PRIVATE CTNR_PRUNING=${CTNR_PRUNING_CODE} CTNR_PRUNING_NONE=${CTNR_PRUNING_CODE_NONE} CTNR_PRUNING_FULL=${CTNR_PRUNING_CODE_FULL})
 
 # RunP2PAlgo target
 add_executable(RunP2PAlgo RunP2PAlgo.cc)
@@ -66,6 +84,7 @@ target_compile_definitions(RunP2PAlgo PRIVATE CTL_THETA=${VAL_CTL_THETA})
 target_compile_definitions(RunP2PAlgo PRIVATE CTL_SIMD_LOGK=${VAL_CTL_SIMD_LOGK})
 target_compile_definitions(RunP2PAlgo PRIVATE CTL_USE_PERFECT_CUSTOMIZATION=${VAL_CTL_USE_PERFECT_CUSTOMIZATION})
 #target_compile_definitions(RunP2PAlgo PRIVATE CTL_STORE_PATH_POINTERS=${VAL_CTL_STORE_PATH_POINTERS})
+target_compile_definitions(RunP2PAlgo PRIVATE CTNR_PRUNING=${CTNR_PRUNING_CODE} CTNR_PRUNING_NONE=${CTNR_PRUNING_CODE_NONE} CTNR_PRUNING_FULL=${CTNR_PRUNING_CODE_FULL})
 target_compile_definitions(RunP2PAlgo PRIVATE NOINLINE_TOGGLE=${NOINLINE_TOGGLE})
 
 if((NUM_THREADS GREATER 1) AND OpenMP_FOUND)

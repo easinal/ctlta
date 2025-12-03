@@ -23,6 +23,8 @@
 #include <iostream>
 #include <boost/dynamic_bitset.hpp>
 
+
+template<ctnr::AccessNodePruning Pruning = ctnr::AccessNodePruning::None>
 class CTNRMetric {
 
 public:
@@ -44,31 +46,25 @@ public:
 
     // Customization phase
     void customize(CTNRData &data) {
-        int64_t dummy1, dummy2, dummy3, dummy4, dummy5, dummy6;
-        customizeWithMeasurements(data, dummy1, dummy2, dummy3, dummy4, dummy5, dummy6);
+        int64_t dummy1, dummy2, dummy3;
+        customizeWithMeasurements(data, dummy1, dummy2, dummy3);
     }
 
     // Sets measurement parameters to times for each step in microseconds.
     void customizeWithMeasurements(CTNRData &data,
                                    int64_t &cchBasicCustomizationTime,
-                                   int64_t &cchPerfectCustomizationTime,
-                                   int64_t &cchConstructChTime,
-                                   int64_t &accessNodeComputationTime,
                                    int64_t &distanceTableComputationTime,
-                                   int64_t &buildLocalMinCHTime) {
-        cchPerfectCustomizationTime = 0;
-        cchConstructChTime = 0;
-        buildLocalMinCHTime = 0;
+                                   int64_t &accessNodeComputationTime) {
         Timer timer;
         cchMetric.customize();
         cchBasicCustomizationTime = timer.elapsed<std::chrono::microseconds>();
-//        localMinCH = customizeCCHAndBuildLocalMinCH(cchBasicCustomizationTime, cchPerfectCustomizationTime, buildLocalMinCHTime);
         timer.restart();
         computeDistanceTable(data);
         distanceTableComputationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
         computeAccessNodes(data);
         accessNodeComputationTime = timer.elapsed<std::chrono::microseconds>();
+
 //        // Debug information
 //        int64_t sumNonInftyAfterPruningForward = 0;
 //        int64_t sumNonInftyAfterPruningBackward = 0;
@@ -89,17 +85,13 @@ public:
 //                  << static_cast<double>(sumNonInftyAfterPruningBackward) / cch.getUpwardGraph().numVertices()
 //                  << std::endl;
 
-        std::cout << "Finished CTNR customization in " << (cchBasicCustomizationTime + cchPerfectCustomizationTime +
-                                                           cchConstructChTime + accessNodeComputationTime +
-                                                           distanceTableComputationTime + buildLocalMinCHTime)
+        std::cout << "Finished CTNR customization in " << (cchBasicCustomizationTime + distanceTableComputationTime +
+                                                           accessNodeComputationTime)
                   << " microseconds." << std::endl;
-        const auto [avgNumNonInftyForward, avgNumNonInftyBackward] = computeAverageNumberOfNonInftyAccessNodes(data);
-        std::cout << "CTNR: Average number of non-infinity forward/backward distances per vertex: "
-                  << avgNumNonInftyForward << "/" << avgNumNonInftyBackward << std::endl;
-
+//        const auto [avgNumNonInftyForward, avgNumNonInftyBackward] = computeAverageNumberOfNonInftyAccessNodes(data);
+//        std::cout << "CTNR: Average number of non-infinity forward/backward distances per vertex: "
+//                  << avgNumNonInftyForward << "/" << avgNumNonInftyBackward << std::endl;
     }
-
-//    const CH &getLocalMinCH() const { return localMinCH; }
 
     const std::vector<int32_t> &getLocalEliminationTree() const { return localEliminationTree; }
 
@@ -109,8 +101,6 @@ public:
     uint64_t sizeInBytes() const {
         uint64_t size = sizeof(CTNRMetric);
         size += cchMetric.sizeInBytes();
-//        size += localMinCH.sizeInBytes();
-
         return size;
     }
 
@@ -148,10 +138,14 @@ private:
             computeAccessNodeDistancesForVertex(rv, cchGraph, cchDownWeights, rankToIdx, data.pos,
                                                 data.accessNodes, data.backwardDistances);
 
-            // Prune access nodes based on domination between each other
-//                pruneAccessNodesForVertex<true>(idx, data.pos, data.accessNodes, data.forwardDistances, data);
-//                pruneAccessNodesForVertex<false>(idx, data.pos, data.accessNodes, data.backwardDistances, data);
-//            }
+            // Prune access nodes for this metric based on domination between access nodes.
+            // Important to do this in the top-down sweep since already pruned upper neighbors lead to fewer
+            // relevant access nodes at this vertex, which decreases the amount of work for pruning at this vertex.
+            if constexpr (Pruning == ctnr::AccessNodePruning::Full) {
+                const int idx = data.rankToIdx(rv);
+                fullPruneAccessNodesForVertex<true>(idx, data.pos, data.accessNodes, data.forwardDistances, data);
+                fullPruneAccessNodesForVertex<false>(idx, data.pos, data.accessNodes, data.backwardDistances, data);
+            }
         });
     }
 
@@ -165,6 +159,8 @@ private:
                                              CTNRData::DistanceVector<int32_t> &dataDistances) const {
         const int idx = rankToIdx(rv);
         const int startThis = dataPos[idx];
+        CTNRData::DistanceLabel distancesThis;
+        CTNRData::DistanceLabel distancesNeighbor;
         FORALL_INCIDENT_EDGES(graph, rv, e) {
             const int neighbor = graph.edgeHead(e);
             const int idxNeighbor = rankToIdx(neighbor);
@@ -185,17 +181,14 @@ private:
                         entry = newDist;
                 }
             } else {
+                // TODO: Optimize SIMD for multi-threading (use lower-level SIMD library to avoid load/store)
                 KASSERT(numNeighbor % CTNRData::K == 0);
                 const auto numBatches = numNeighbor / CTNRData::K;
-                CTNRData::DistanceLabel distancesThis;
-                CTNRData::DistanceLabel distancesNeighbor;
                 for (auto b = 0; b < numBatches; ++b) {
                     const auto offset = b * CTNRData::K;
                     distancesThis.load(&dataDistances[startThis + offset]);
                     distancesNeighbor.load(&dataDistances[startNeighbor + offset]);
-                    const CTNRData::DistanceLabel wLabel = w;
-                    const CTNRData::DistanceLabel newDistances = distancesNeighbor + wLabel;
-                    distancesThis.min(newDistances);
+                    distancesThis.min(distancesNeighbor + w);
                     distancesThis.store(&dataDistances[startThis + offset]);
                 }
             }
@@ -204,11 +197,11 @@ private:
 
     template<bool forward>
     DEBUG_NOINLINE
-    void pruneAccessNodesForVertex(const int idx,
-                                   const std::vector<int32_t> &dataPos,
-                                   const std::vector<int32_t> &dataNodes,
-                                   CTNRData::DistanceVector<int32_t> &dataDistances,
-                                   const CTNRData &data) const {
+    void fullPruneAccessNodesForVertex(const int idx,
+                                       const std::vector<int32_t> &dataPos,
+                                       const std::vector<ctnr::TransitNodeId> &dataNodes,
+                                       CTNRData::DistanceVector<int32_t> &dataDistances,
+                                       const CTNRData &data) const {
         // Set distances for all dominated access nodes to CTNR_INFTY
         const auto start = dataPos[idx];
         const auto end = dataPos[idx + 1];
