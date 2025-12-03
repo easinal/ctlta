@@ -233,64 +233,6 @@ private:
         builder.buildDistanceTable(data);
     }
 
-
-    // An active vertex during a DFS, i.e., a vertex that has been reached but not finished.
-    struct ActiveVertex {
-        // Constructs an active vertex.
-        ActiveVertex(const int id, const int nextUnexploredEdge)
-                : id(id), nextUnexploredEdge(nextUnexploredEdge) {}
-
-        int id;                 // The ID of the active vertex.
-        int nextUnexploredEdge; // The next unexplored incident edge.
-    };
-
-    // Customize CCH including perfect customization and construct CH that only has edges required for the given metric.
-    // CH is restricted to vertices below transit nodes, which is enough for local queries.
-    CH customizeCCHAndBuildLocalMinCH(int64_t &cchBasicCustomizationTime, int64_t &cchPerfectCustomizationTime,
-                                      int64_t &buildLocalMinCHTime) {
-
-        Timer timer;
-        cchMetric.customize();
-        cchBasicCustomizationTime = timer.elapsed<std::chrono::microseconds>();
-
-        timer.restart();
-        const auto &cchGraph = cch.getUpwardGraph();
-        std::vector<int8_t> keepUpEdge;
-        std::vector<int8_t> keepDownEdge;
-
-#pragma omp parallel sections
-        {
-#pragma omp section
-            keepUpEdge.resize(cchGraph.numEdges() + 1, true);
-#pragma omp section
-            keepDownEdge.resize(cchGraph.numEdges() + 1, true);
-        }
-
-        keepUpEdge.back() = false;
-        keepDownEdge.back() = false;
-        // Run perfect customization marking all edges for removal that are not needed for this metric
-        cchMetric.runPerfectCustomization(
-                [&](const int e) { keepUpEdge[e] = false; },
-                [&](const int e) { keepDownEdge[e] = false; });
-
-        // Also mark all edges leading to transit nodes for removal
-        FORALL_EDGES(cchGraph, e) {
-            const auto head = cchGraph.edgeHead(e);
-            if (hierarchy.isTransitNode(head)) {
-                keepUpEdge[e] = false;
-                keepDownEdge[e] = false;
-            }
-        }
-
-        cchPerfectCustomizationTime = timer.elapsed<std::chrono::microseconds>();
-
-        timer.restart();
-        CH ch = cchMetric.buildCHKeepingGivenEdges(keepUpEdge, keepDownEdge);
-        buildLocalMinCHTime = timer.elapsed<std::chrono::microseconds>();
-
-        return ch;
-    }
-
     std::pair<double, double> computeAverageNumberOfNonInftyAccessNodes(const CTNRData &data) const {
         int64_t fSum = 0;
         int64_t bSum = 0;

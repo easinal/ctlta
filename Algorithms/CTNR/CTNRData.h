@@ -12,7 +12,7 @@
 #include "DataStructures/Labels/BasicLabelSet.h"
 
 class CTNRData {
-    static constexpr int LOGK = 0; // K=8
+    static constexpr int LOGK = 3; // K=8
     static constexpr int K = 1 << LOGK;
     static_assert(LOGK != 1, "LOGK=1 (K=2) not supported for SIMD label sets.");
     static constexpr bool USE_SIMD = (LOGK > 0);
