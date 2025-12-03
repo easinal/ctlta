@@ -18,10 +18,12 @@ public:
     // Constructor
     CTNRQuery(const TransitNodeHierarchy &hierarchy, CTNRData &data,
               const std::vector<int>& localEliminationTree,
-              const CH &localMinimumWeightedCH)
+              const CCH::UpGraph &cchGraph,
+              int const * const cchUpWeights,
+              int const * const cchDownWeights)
             : hierarchy(hierarchy),
               data(data),
-              localQuery(localMinimumWeightedCH, localEliminationTree) {}
+              localQuery(cchGraph, cchUpWeights, cchDownWeights, localEliminationTree) {}
 
     // Main query method (s, t are rank IDs)
     int32_t run(int32_t s, int32_t t) {
@@ -129,6 +131,6 @@ private:
     int32_t lastDistance = CTNR_INFTY;
     bool lastModeIsLocal = true;
 
-    EliminationTreeQuery<LabelSet> localQuery;
+    EliminationTreeQuery<LabelSet, false> localQuery;
 };
 

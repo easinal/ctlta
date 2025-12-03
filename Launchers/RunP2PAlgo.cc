@@ -314,16 +314,19 @@ inline void runQueries(const CommandLineParser &clp) {
         LabellingT ctl(treeHierarchy);
         ctl.init();
 
-        CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch, useLengths ? &graph.length(0) : &graph.travelTime(0));
+        CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch,
+                                                                                 useLengths ? &graph.length(0)
+                                                                                            : &graph.travelTime(0));
         metric.buildCustomizedCTL(ctl);
 
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# Separator: " << sepFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
 
-        CTLQuery<CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION>::SearchGraph, LabellingT, CTLLabelSet> algo(treeHierarchy, metric.upwardGraph(),
-                                                                      metric.downwardGraph(), metric.upwardWeights(),
-                                                                      metric.downwardWeights(), ctl);
+        CTLQuery<CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION>::SearchGraph, LabellingT, CTLLabelSet> algo(
+                treeHierarchy, metric.upwardGraph(),
+                metric.downwardGraph(), metric.upwardWeights(),
+                metric.downwardWeights(), ctl);
 
         outputFile << "# Memory usage CCH: " << (cch.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
         outputFile << "# Memory usage TreeHierarchy: " << (treeHierarchy.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
@@ -354,38 +357,43 @@ inline void runQueries(const CommandLineParser &clp) {
         // Build CCH and tree hierarchy
         CCH cch;
         cch.preprocess(graph, sepDecomp);
-        std::cout<<"Finished CCH preprocessing"<<std::endl;
+        std::cout << "Finished CCH preprocessing" << std::endl;
 
         const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
         TransitNodeHierarchy hierarchy;
         hierarchy.preprocess(graph, sepDecomp, levelThreshold); // first levelThreshold levels are transit nodes
-        std::cout<<"Finished TransitNodeHierarchy preprocessing"<<std::endl;
+        std::cout << "Finished TransitNodeHierarchy preprocessing" << std::endl;
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
         CTNRPreprocessor preprocessor(hierarchy, cch);
-        CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(), useLengths? &graph.length(0) : &graph.travelTime(0));
+        CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+                          useLengths ? &graph.length(0) : &graph.travelTime(0));
 
         // Preprocess CTNR
         preprocessor.preprocess(data);
-        std::cout<<"Finished CTNRPreprocessor preprocessing"<<std::endl;
+        std::cout << "Finished CTNRPreprocessor preprocessing" << std::endl;
         // Customize CTNR
         metric.customize(data);
-        std::cout<<"Finished CTNRMetric customization"<<std::endl;
+        std::cout << "Finished CTNRMetric customization" << std::endl;
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
         // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
 
         // Use generic runQueries with CTNRQuery; pass CCH rank IDs to the algo
-        CTNRQuery<InputGraph> algo(hierarchy, data, metric.getLocalEliminationTree(), metric.getLocalMinCH());
+        CTNRQuery<InputGraph> algo(hierarchy, data, metric.getLocalEliminationTree(), cch.getUpwardGraph(),
+                                   metric.getCCHMetric().upwardWeights(), metric.getCCHMetric().downwardWeights());
 
         outputFile << "# Memory usage CCH: " << (cch.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
         outputFile << "# Memory usage hierarchy: " << (hierarchy.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
-        outputFile << "# Memory usage distance table: " << (data.sizeDistanceTableInBytes()) / BYTES_PER_MB << " MB" << '\n';
-        outputFile << "# Memory usage access nodes: " << (data.sizeAccessNodesInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage distance table: " << (data.sizeDistanceTableInBytes()) / BYTES_PER_MB << " MB"
+                   << '\n';
+        outputFile << "# Memory usage access nodes: " << (data.sizeAccessNodesInBytes()) / BYTES_PER_MB << " MB"
+                   << '\n';
         outputFile << "# Memory usage preprocessor: " << (preprocessor.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
         outputFile << "# Memory usage query: " << (algo.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
         outputFile << "# Memory usage total: " <<
-                   (cch.sizeInBytes() + hierarchy.sizeInBytes() + data.sizeInBytes() + preprocessor.sizeInBytes() + metric.sizeInBytes() +
+                   (cch.sizeInBytes() + hierarchy.sizeInBytes() + data.sizeInBytes() + preprocessor.sizeInBytes() +
+                    metric.sizeInBytes() +
                     algo.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
         runQueries(algo, demandFileName, outputFile, [&](const int v) { return cch.getRanks()[v]; });
 
@@ -675,15 +683,19 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
 
-        outputFile << "cch_basic_customization,cch_perfect_customization,cch_build_ch,access_node_computation,distance_table_computation,local_min_ch_construction,total_time\n";
+        outputFile
+                << "cch_basic_customization,cch_perfect_customization,cch_build_ch,access_node_computation,distance_table_computation,local_min_ch_construction,total_time\n";
         int64_t cchBasicCustom, cchPerfectCustom, cchBuildCH, accessNodeComp, distTableComp, buildLocalMinCH, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
-            CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(), useLengths? &graph.length(0) : &graph.travelTime(0));
+            CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+                              useLengths ? &graph.length(0) : &graph.travelTime(0));
             timer.restart();
-            metric.customizeWithMeasurements(data, cchBasicCustom, cchPerfectCustom, cchBuildCH, accessNodeComp, distTableComp, buildLocalMinCH);
+            metric.customizeWithMeasurements(data, cchBasicCustom, cchPerfectCustom, cchBuildCH, accessNodeComp,
+                                             distTableComp, buildLocalMinCH);
             tot = timer.elapsed<std::chrono::microseconds>();
-            outputFile << cchBasicCustom << ',' << cchPerfectCustom << ',' << cchBuildCH << ',' << accessNodeComp << ',' << distTableComp << ',' << buildLocalMinCH << ',' << tot << '\n';
+            outputFile << cchBasicCustom << ',' << cchPerfectCustom << ',' << cchBuildCH << ',' << accessNodeComp << ','
+                       << distTableComp << ',' << buildLocalMinCH << ',' << tot << '\n';
         }
     } else if (algorithmName == "CTL-custom") {
 
@@ -722,7 +734,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         int cchCustom, ctlCustom, tot;
         for (auto i = 0; i < numCustomRuns; ++i) {
             {
-                CCHMetric metric(cch, useLengths? &graph.length(0) : &graph.travelTime(0));
+                CCHMetric metric(cch, useLengths ? &graph.length(0) : &graph.travelTime(0));
                 timer.restart();
                 if constexpr (CTL_USE_PERFECT_CUSTOMIZATION) {
                     metric.buildMinimumWeightedCH();
@@ -732,7 +744,10 @@ inline void runPreprocessing(const CommandLineParser &clp) {
                 cchCustom = timer.elapsed<std::chrono::microseconds>();
             }
             {
-                CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch, useLengths? &graph.length(0) : &graph.travelTime(0));
+                CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch,
+                                                                                         useLengths ? &graph.length(0)
+                                                                                                    : &graph.travelTime(
+                                                                                                 0));
                 timer.restart();
                 metric.buildCustomizedCTL(ctl);
                 tot = timer.elapsed<std::chrono::microseconds>();

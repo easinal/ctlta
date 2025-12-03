@@ -21,7 +21,7 @@
 // after another. This is useful when performing multiple queries from the same source (or sources)
 // in succession. In that case, it suffices to perform the forward search once and use its distance
 // labels for multiple reverse searches.
-template<typename LabelSetT>
+template<typename LabelSetT, bool UseCH = true>
 class EliminationTreeQuery {
 private:
     using DistanceLabel = typename LabelSetT::DistanceLabel;
@@ -45,27 +45,57 @@ private:
 
     static constexpr int K = LabelSetT::K; // The number of simultaneous shortest-path computations.
 
-public:
-    // Constructs an elimination tree query instance.
-    EliminationTreeQuery(const CH &ch, const std::vector<int32_t> &eliminTree)
+    static constexpr bool DO_NOT_USE_FAST_QUERY =
 #ifdef NO_FAST_ELIMINATION_TREE_QUERY
-    : forwardSearch(ch.upwardGraph(), eliminTree),
-      reverseSearch(ch.downwardGraph(), eliminTree) {
+            true;
 #else
-            : forwardSearch(ch.upwardGraph(), eliminTree, {tentativeDistances}),
-              reverseSearch(ch.downwardGraph(), eliminTree, {tentativeDistances}) {
+            false;
 #endif
+
+public:
+
+    // Constructs an elimination tree query instance for a given CH (useful for using minimum weighted CH obtained
+    // from perfect customization of CCH).
+    EliminationTreeQuery(const CH &ch, const std::vector<int32_t> &eliminTree) requires (UseCH && DO_NOT_USE_FAST_QUERY)
+            : forwardSearch(ch.upwardGraph(), eliminTree),
+              reverseSearch(ch.downwardGraph(), eliminTree) {
         assert(ch.upwardGraph().numVertices() == eliminTree.size());
     }
+
+    // Constructs an elimination tree query instance for a given CH (useful for using minimum weighted CH obtained
+    // from perfect customization of CCH).
+    EliminationTreeQuery(const CH &ch, const std::vector<int32_t> &eliminTree) requires (UseCH && !DO_NOT_USE_FAST_QUERY)
+            : forwardSearch(ch.upwardGraph(), eliminTree, {tentativeDistances}),
+              reverseSearch(ch.downwardGraph(), eliminTree, {tentativeDistances}) {
+        assert(ch.upwardGraph().numVertices() == eliminTree.size());
+    }
+
+    // Constructs an elimination tree query instance for a CCH after basic customization, using the whole CCH graph with
+    // metric-independent shortcuts.
+    EliminationTreeQuery(const CCH::UpGraph& graph,
+                         int const * const upWeights,
+                         int const * const downWeights,
+                         const std::vector<int32_t> &eliminTree) requires (!UseCH && DO_NOT_USE_FAST_QUERY)
+            : forwardSearch(graph, upWeights, eliminTree),
+              reverseSearch(graph, downWeights, eliminTree) {}
+
+    // Constructs an elimination tree query instance for a CCH after basic customization, using the whole CCH graph with
+    // metric-independent shortcuts.
+    EliminationTreeQuery(const CCH::UpGraph& graph,
+                         int const * const upWeights,
+                         int const * const downWeights,
+                         const std::vector<int32_t> &eliminTree) requires (!UseCH && !DO_NOT_USE_FAST_QUERY)
+            : forwardSearch(graph, upWeights, eliminTree, {tentativeDistances}),
+              reverseSearch(graph, downWeights, eliminTree, {tentativeDistances}) {}
 
     // Move constructor.
     EliminationTreeQuery(EliminationTreeQuery &&other) noexcept
             : forwardSearch(std::move(other.forwardSearch)),
               reverseSearch(std::move(other.reverseSearch)) {
-#ifndef NO_FAST_ELIMINATION_TREE_QUERY
-        forwardSearch.pruneSearch = {tentativeDistances};
-        reverseSearch.pruneSearch = {tentativeDistances};
-#endif
+        if constexpr (!DO_NOT_USE_FAST_QUERY) {
+            forwardSearch.pruneSearch = {tentativeDistances};
+            reverseSearch.pruneSearch = {tentativeDistances};
+        }
     }
 
     // Runs an elimination tree query from s to t.
@@ -178,12 +208,12 @@ private:
         return true;
     }
 
-    using UpwardSearch =
-#ifdef NO_FAST_ELIMINATION_TREE_QUERY
-            UpwardEliminationTreeSearch<LabelSetT>;
-#else
-            UpwardEliminationTreeSearch<LabelSetT, PruningCriterion>;
-#endif
+    using SearchGraphT = std::conditional_t<UseCH, CH::SearchGraph, CCH::UpGraph>;
+
+    using UpwardSearch = std::conditional_t<DO_NOT_USE_FAST_QUERY,
+            UpwardEliminationTreeSearch<LabelSetT, elimintree::PruningCriterion, SearchGraphT>,
+            UpwardEliminationTreeSearch<LabelSetT, PruningCriterion, SearchGraphT>
+    >;
 
     UpwardSearch forwardSearch;       // The forward search from the source(s).
     UpwardSearch reverseSearch;       // The reverse search from the target(s).

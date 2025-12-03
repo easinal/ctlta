@@ -56,9 +56,14 @@ public:
                                    int64_t &accessNodeComputationTime,
                                    int64_t &distanceTableComputationTime,
                                    int64_t &buildLocalMinCHTime) {
+        cchPerfectCustomizationTime = 0;
         cchConstructChTime = 0;
-        localMinCH = customizeCCHAndBuildLocalMinCH(cchBasicCustomizationTime, cchPerfectCustomizationTime, buildLocalMinCHTime);
+        buildLocalMinCHTime = 0;
         Timer timer;
+        cchMetric.customize();
+        cchBasicCustomizationTime = timer.elapsed<std::chrono::microseconds>();
+//        localMinCH = customizeCCHAndBuildLocalMinCH(cchBasicCustomizationTime, cchPerfectCustomizationTime, buildLocalMinCHTime);
+        timer.restart();
         computeDistanceTable(data);
         distanceTableComputationTime = timer.elapsed<std::chrono::microseconds>();
         timer.restart();
@@ -91,17 +96,20 @@ public:
         const auto [avgNumNonInftyForward, avgNumNonInftyBackward] = computeAverageNumberOfNonInftyAccessNodes(data);
         std::cout << "CTNR: Average number of non-infinity forward/backward distances per vertex: "
                   << avgNumNonInftyForward << "/" << avgNumNonInftyBackward << std::endl;
+
     }
 
-    const CH &getLocalMinCH() const { return localMinCH; }
+//    const CH &getLocalMinCH() const { return localMinCH; }
 
     const std::vector<int32_t> &getLocalEliminationTree() const { return localEliminationTree; }
+
+    const CCHMetric &getCCHMetric() const { return cchMetric; }
 
     // Memory usage calculation including node levels
     uint64_t sizeInBytes() const {
         uint64_t size = sizeof(CTNRMetric);
         size += cchMetric.sizeInBytes();
-        size += localMinCH.sizeInBytes();
+//        size += localMinCH.sizeInBytes();
 
         return size;
     }
@@ -130,13 +138,14 @@ private:
 
 
         // TODO: Debug for USA network
+        const auto &cchGraph = cch.getUpwardGraph();
 #pragma omp parallel
 #pragma omp single nowait
         cch.forEachVertexTopDown([&](int32_t rv) {
             // Compute access node distances by using access node distances of upward neighbors
-            computeAccessNodeDistancesForVertex(rv, localMinCH.upwardGraph(), rankToIdx, data.pos,
+            computeAccessNodeDistancesForVertex(rv, cchGraph, cchUpWeights, rankToIdx, data.pos,
                                                 data.accessNodes, data.forwardDistances);
-            computeAccessNodeDistancesForVertex(rv, localMinCH.downwardGraph(), rankToIdx, data.pos,
+            computeAccessNodeDistancesForVertex(rv, cchGraph, cchDownWeights, rankToIdx, data.pos,
                                                 data.accessNodes, data.backwardDistances);
 
             // Prune access nodes based on domination between each other
@@ -146,9 +155,10 @@ private:
         });
     }
 
-    template<typename RankToIdx>
+    template<typename GraphT, typename RankToIdx>
     void computeAccessNodeDistancesForVertex(const int rv,
-                                             const CH::SearchGraph &graph,
+                                             const GraphT &graph,
+                                             int const *const weights,
                                              const RankToIdx &rankToIdx,
                                              const std::vector<int32_t> &dataPos,
                                              const std::vector<ctnr::TransitNodeId> &dataNodes,
@@ -158,7 +168,7 @@ private:
         FORALL_INCIDENT_EDGES(graph, rv, e) {
             const int neighbor = graph.edgeHead(e);
             const int idxNeighbor = rankToIdx(neighbor);
-            const int w = graph.traversalCost(e);
+            const int w = weights[e];
             KASSERT(w < INFTY);
 
             // If neighbor is not a transit node, propagate all its access nodes. The list of access nodes of the
@@ -225,7 +235,8 @@ private:
 
     void computeDistanceTable(CTNRData &data) {
         // TODO: implement minCH for only transit node subgraph to use in distance table computation instead of CCH graph?
-        TransitDistanceTableBuilder builder(hierarchy, cch.getUpwardGraph(), cchMetric.upwardWeights(), cchMetric.downwardWeights());
+        TransitDistanceTableBuilder builder(hierarchy, cch.getUpwardGraph(), cchMetric.upwardWeights(),
+                                            cchMetric.downwardWeights());
         builder.buildDistanceTable(data);
     }
 
@@ -242,7 +253,7 @@ private:
 
     // Customize CCH including perfect customization and construct CH that only has edges required for the given metric.
     // CH is restricted to vertices below transit nodes, which is enough for local queries.
-    CH customizeCCHAndBuildLocalMinCH(int64_t& cchBasicCustomizationTime, int64_t& cchPerfectCustomizationTime,
+    CH customizeCCHAndBuildLocalMinCH(int64_t &cchBasicCustomizationTime, int64_t &cchPerfectCustomizationTime,
                                       int64_t &buildLocalMinCHTime) {
 
         Timer timer;
@@ -250,7 +261,7 @@ private:
         cchBasicCustomizationTime = timer.elapsed<std::chrono::microseconds>();
 
         timer.restart();
-        const auto& cchGraph = cch.getUpwardGraph();
+        const auto &cchGraph = cch.getUpwardGraph();
         std::vector<int8_t> keepUpEdge;
         std::vector<int8_t> keepDownEdge;
 
@@ -315,7 +326,7 @@ private:
     CCHMetric cchMetric;
 
     // Minimum CH restricted to non-transit nodes for local queries.
-    CH localMinCH;
+//    CH localMinCH;
 
     // Elimination tree of the CCH restricted to non-transit nodes for local queries.
     std::vector<int32_t> localEliminationTree;

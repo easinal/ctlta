@@ -38,7 +38,7 @@ namespace elimintree {
 template<typename LabelSetT, typename PruningCriterionT = elimintree::PruningCriterion, typename GraphT = CH::SearchGraph>
 class UpwardEliminationTreeSearch {
     // Some classes are allowed to execute an upward elimination tree search step by step.
-    template<typename>
+    template<typename, bool>
     friend
     class EliminationTreeQuery;
 
@@ -49,8 +49,9 @@ private:
 
     static constexpr int K = LabelSetT::K; // The number of simultaneous shortest-path computations.
 
-    // Called by the two public overloads of constructor for general graphs plus given edge weight and for CH search
-    // graphs.
+public:
+
+    // Base overload for general graph and weights.
     UpwardEliminationTreeSearch(const GraphT &searchGraph,
                                 int const *const edgeWeights,
                                 const std::vector<int32_t> &eliminationTree,
@@ -66,16 +67,14 @@ private:
         lastSources.fill(INVALID_VERTEX);
     }
 
-public:
-
-    // Constructs an upward elimination tree search instance with given edge weights.
-    UpwardEliminationTreeSearch(const GraphT &searchGraph,
-                                const std::vector<int> &edgeWeights,
-                                const std::vector<int32_t> &eliminationTree,
-                                PruningCriterionT pruneSearch = {})
-            : UpwardEliminationTreeSearch(searchGraph, edgeWeights.data(), eliminationTree, pruneSearch) {
-        assert(searchGraph.numEdges() == edgeWeights.size());
-    }
+//    // Constructs an upward elimination tree search instance with given edge weights.
+//    UpwardEliminationTreeSearch(const GraphT &searchGraph,
+//                                const std::vector<int> &edgeWeights,
+//                                const std::vector<int32_t> &eliminationTree,
+//                                PruningCriterionT pruneSearch = {})
+//            : UpwardEliminationTreeSearch(searchGraph, edgeWeights.data(), eliminationTree, pruneSearch) {
+//        assert(searchGraph.numEdges() == edgeWeights.size());
+//    }
 
     // Constructor overload that uses the CH::Weight edge weights in graph.
     template<typename SearchGraph = GraphT, typename std::enable_if<SearchGraph::template has<CH::Weight>()>::type...>
