@@ -93,6 +93,11 @@ public:
         return {static_cast<double>(fSum) / count, static_cast<double>(bSum) / count};
     }
 
+    int32_t const * getDistanceTableRow(ctnr::TransitNodeId indexS) const {
+        return &distanceTable[indexS * distanceTableRowSize];
+    }
+
+
 private:
 
     // Get internal vertex index for CCH rank r.
@@ -105,14 +110,15 @@ private:
         distanceTable.assign(distanceTableRowSize * distanceTableRowSize, CTNR_INFTY);
     }
 
+    int32_t *getDistanceTableRow(ctnr::TransitNodeId indexS) {
+        return &distanceTable[indexS * distanceTableRowSize];
+    }
+
     // Input: Internal transit node index of access nodes.
     void setDistanceBetweenTransitNodes(ctnr::TransitNodeId indexS, ctnr::TransitNodeId indexT, int32_t distance) {
         distanceTable[indexS * distanceTableRowSize + indexT] = distance;
     }
 
-    int32_t *getDistanceTableRow(ctnr::TransitNodeId indexS) {
-        return &distanceTable[indexS * distanceTableRowSize];
-    }
 
     friend class CTNRMetric;
 

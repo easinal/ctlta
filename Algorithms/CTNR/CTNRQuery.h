@@ -79,11 +79,12 @@ private:
         }
         if (sIsTransit) {
             const ctnr::TransitNodeId nodeS = hierarchy.getTransitNodeIndexOfRank(s);
+            int32_t const * const distanceTableRow = data.getDistanceTableRow(nodeS);
             const auto numAccessT = accessNodesT.size();
             for (auto j = 0; j < numAccessT; ++j) {
                 const ctnr::TransitNodeId nodeT = accessNodesT[j];
                 const int32_t distT = accessDistancesT[j];
-                const int32_t mid = data.getDistanceBetweenTransitNodes(nodeS, nodeT);
+                const int32_t mid = distanceTableRow[nodeT];
                 const int32_t total = mid + distT;
                 if (total < minDist)
                     minDist = total;
@@ -111,12 +112,14 @@ private:
             const int32_t distS = accessDistancesS[i];
             if (distS >= minDist) continue;
 
+            int32_t const * const distanceTableRow = data.getDistanceTableRow(nodeS);
+
             for (auto j = 0; j < numAccessT; ++j) {
                 const ctnr::TransitNodeId nodeT = accessNodesT[j];
                 const int32_t distT = accessDistancesT[j];
 //                if (distT >= CTNR_INFTY) continue;
 //                if (distS + distT >= minDist) continue;
-                const int32_t mid = data.getDistanceBetweenTransitNodes(nodeS, nodeT);
+                const int32_t mid = distanceTableRow[nodeT];
                 const int32_t total = distS + mid + distT;
                 if (total < minDist)
                     minDist = total;
