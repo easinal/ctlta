@@ -46,8 +46,8 @@ class CCHMetric {
   }
 
   CH buildMinimumWeightedCH() {
-      int64_t time = 0;
-      return buildMinimumWeightedCH<NoOpTimer>(time, time, time);
+      int64_t basicTimer, perfectTimer, constructionTimer = 0;
+      return buildMinimumWeightedCH<NoOpTimer>(basicTimer, perfectTimer, constructionTimer);
   }
 
   // Accessors for edge weights
@@ -56,9 +56,9 @@ class CCHMetric {
 
   // Returns a weighted CH having the smallest possible number of edges for the given order.
   template<typename TimerT>
-  CH buildMinimumWeightedCH(int64_t& basicCustomizationTime,
-                            int64_t& perfectCustomizationTime,
-                            int64_t& constructionTime) {
+  CH buildMinimumWeightedCH(int64_t &basicCustomizationTime,
+                            int64_t &perfectCustomizationTime,
+                            int64_t &constructionTime) {
     const auto& cchGraph = cch.getUpwardGraph();
     std::vector<int8_t> keepUpEdge;
     std::vector<int8_t> keepDownEdge;
@@ -77,17 +77,19 @@ class CCHMetric {
     TimerT timer;
     customize();
     basicCustomizationTime = timer.template elapsed<std::chrono::microseconds>();
+    std::cout<<"Basic customization time: "<<basicCustomizationTime<<" microseconds."<<std::endl;
 
     timer.restart();
     runPerfectCustomization(
         [&](const int e) { keepUpEdge[e] = false; },
         [&](const int e) { keepDownEdge[e] = false; });
     perfectCustomizationTime = timer.template elapsed<std::chrono::microseconds>();
+    std::cout<<"Perfect customization time: "<<perfectCustomizationTime<<" microseconds."<<std::endl;
 
     timer.restart();
     CH ch = buildCHKeepingGivenEdges(keepUpEdge, keepDownEdge);
     constructionTime = timer.template elapsed<std::chrono::microseconds>();
-
+    std::cout<<"CH construction time: "<<constructionTime<<" microseconds."<<std::endl;
     return ch;
   }
 
@@ -126,10 +128,31 @@ class CCHMetric {
   void computeCustomizedMetric() noexcept {
     #pragma omp parallel
     #pragma omp single nowait
-    if (omp_get_num_threads() == 1)
-      computeCustomizedMetricSequentially();
-    else
-      computeCustomizedMetricInParallel();
+    cch.forEachVertexBottomUpByLayer([&](const int u) {
+      FORALL_INCIDENT_EDGES(cch.getUpwardGraph(), u, lower) {
+        const int v = cch.getUpwardGraph().edgeHead(lower);
+        cch.forEachUpperTriangle(u, v, lower, [&](int, const int inter, const int upper) {
+          if (downWeights[lower] + upWeights[inter] < upWeights[upper])
+            upWeights[upper] = downWeights[lower] + upWeights[inter];
+          if (downWeights[inter] + upWeights[lower] < downWeights[upper])
+            downWeights[upper] = downWeights[inter] + upWeights[lower];
+          return true;
+        });
+      }
+    },[&](const int u) {
+      FORALL_INCIDENT_EDGES(cch.getUpwardGraph(), u, lower) {
+        const int v = cch.getUpwardGraph().edgeHead(lower);
+        cch.forEachUpperTriangle(u, v, lower, [&](int, const int inter, const int upper) {
+          atomicFetchMin(upWeights[upper], downWeights[lower] + upWeights[inter]);
+          atomicFetchMin(downWeights[upper], downWeights[inter] + upWeights[lower]);
+          return true;
+        });
+      }
+    });
+    // if (omp_get_num_threads() == 1)
+    //   computeCustomizedMetricSequentially();
+    // else
+    //   computeCustomizedMetricInParallel();
   }
 
   // Computes a customized metric sequentially.
@@ -167,7 +190,7 @@ class CCHMetric {
   void runPerfectCustomization(T1 markUpEdgeForRemoval, T2 markDownEdgeForRemoval) noexcept {
     #pragma omp parallel
     #pragma omp single nowait
-    cch.forEachVertexTopDown([&](const int u) {
+    cch.forEachVertexTopDownByLayer([&](const int u) {
       FORALL_INCIDENT_EDGES(cch.getUpwardGraph(), u, lower) {
         const int v = cch.getUpwardGraph().edgeHead(lower);
         cch.forEachUpperTriangle(u, v, lower, [&](int, const int inter, const int upper) {

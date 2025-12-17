@@ -15,6 +15,7 @@
 #include "DataStructures/Utilities/Permutation.h"
 #include "Tools/Constants.h"
 #include "Tools/Workarounds.h"
+#include "Tools/Timer.h"
 
 // A metric-independent customizable contraction hierarchy. It uses a nested dissection order
 // associated with a separator decomposition to order the vertices by importance.
@@ -87,6 +88,8 @@ public:
         }
         firstUpInputEdge.back() = upInputEdges.size();
         firstDownInputEdge.back() = downInputEdges.size();
+
+        buildLayering();
     }
 
     // Returns the separator decomposition used to build this CCH.
@@ -135,23 +138,66 @@ public:
                 return false;
         return true;
     }
-
-    // Applies func to each vertex in bottom-up fashion. That is, func is applied to a vertex after it
-    // has been applied to each downward neighbor. If this member function is called in a parallel
-    // region, the function calls are parallelized.
+    
     template<typename CallableT>
     void forEachVertexBottomUp(CallableT func) const {
         forEachVertexBottomUp(0, upGraph.numVertices(), 0, func);
     }
 
-    // Applies func to each vertex in top-down fashion. That is, func is applied to a vertex after it
-    // has been applied to each upward neighbor. If this member function is called in a parallel
-    // region, the function calls are parallelized.
+
+    template <class SeqCallable, class ParaCallable>
+    void forEachVertexBottomUpByLayer(SeqCallable Seqfunc, ParaCallable Parafunc) const {
+        assert(numLayers != 0 || upGraph.numVertices() == 0);
+        if (numLayers == 0)
+            return;
+        for (auto layer = 0; layer < numLayers; ++layer) {
+            const auto layerSize = layerOffsets[layer + 1] - layerOffsets[layer];
+            if (omp_get_num_threads()>1 && layerSize > 32 * omp_get_num_threads()) {
+#pragma omp parallel for schedule(dynamic)
+                for (auto i = layerOffsets[layer]; i < layerOffsets[layer + 1]; ++i){
+                    Parafunc(layerVertices[i]);
+                }
+            } else {
+                for (auto i = layerOffsets[layer]; i < layerOffsets[numLayers]; ++i){
+                    Seqfunc(layerVertices[i]);
+                }
+                break;
+            }
+        }
+    }
+
+    template <class CallableT>
+    void forEachVertexBottomUpByLayer(CallableT func) const {
+        forEachVertexBottomUpByLayer(func, func);
+    }
+
     template<typename CallableT>
     void forEachVertexTopDown(CallableT func) const {
         forEachVertexTopDown(0, upGraph.numVertices(), 0, func);
     }
 
+    template <class SeqCallable, class ParaCallable>
+    void forEachVertexTopDownByLayer(SeqCallable Seqfunc, ParaCallable Parafunc) const {
+        assert(numLayers != 0 || upGraph.numVertices() == 0);
+        for (auto layer = numLayers - 1; layer >= 0; --layer) {
+            const auto layerSize = layerOffsets[layer + 1] - layerOffsets[layer];
+            if (omp_get_num_threads()>1 && layerSize > 32 * omp_get_num_threads()) {
+                #pragma omp parallel for schedule(dynamic)
+                for (auto i = layerOffsets[layer+1]-1; i >= layerOffsets[layer]; --i){
+                    Parafunc(layerVertices[i]);
+                }
+            } else {
+                for (auto i = layerOffsets[layer+1]-1; i >= layerOffsets[0]; --i)
+                    Seqfunc(layerVertices[i]);
+                break;
+            }
+        }
+    }
+    template<typename CallableT>
+    void forEachVertexTopDownByLayer(CallableT func) const {
+        forEachVertexTopDownByLayer(func, func);
+    }
+    
     // Applies func to each lower triangle of the specified edge.
     template<typename CallableT>
     bool forEachLowerTriangle(const int tail, const int head, const int edge, CallableT func) const {
@@ -214,6 +260,8 @@ public:
         bio::read(in, firstDownInputEdge);
         bio::read(in, upInputEdges);
         bio::read(in, downInputEdges);
+
+        buildLayering();
     }
 
     // Writes the CCH to the specified binary file.
@@ -239,7 +287,9 @@ public:
                + firstUpInputEdge.size() * sizeof(int32_t)
                + firstDownInputEdge.size() * sizeof(int32_t)
                + upInputEdges.size() * sizeof(int32_t)
-               + downInputEdges.size() * sizeof(int32_t);
+               + downInputEdges.size() * sizeof(int32_t)
+               + layerOffsets.size() * sizeof(int32_t)
+               + layerVertices.size() * sizeof(int32_t);
     }
 
 private:
@@ -290,6 +340,50 @@ private:
         }
     }
 
+    void buildLayering() {
+        layerOffsets.clear();
+        layerVertices.clear();
+        numLayers = 0;
+
+        const int n = upGraph.numVertices();
+        if (n == 0)
+            return;
+
+        std::vector<int32_t> vertexLayer(n, 0);
+        int32_t maxLayer = 0;
+        for (int u = 0; u < n; ++u) {
+            const int32_t baseLayer = vertexLayer[u];
+
+            const auto propagate = [&](const int v) {
+                const int32_t candidate = baseLayer + 1;
+                if (candidate > vertexLayer[v]) {
+                    vertexLayer[v] = candidate;
+                    if (candidate > maxLayer)
+                        maxLayer = candidate;
+                }
+            };
+
+            for (int e = upGraph.firstEdge(u); e != upGraph.lastEdge(u); ++e)
+                propagate(upGraph.edgeHead(e));
+        }
+
+        numLayers = maxLayer + 1;
+
+        layerOffsets.assign(numLayers + 1, 0);
+        for (const auto layer : vertexLayer)
+            ++layerOffsets[layer + 1];
+        for (int i = 0; i < numLayers; ++i){
+            layerOffsets[i + 1] += layerOffsets[i];
+        }
+
+        layerVertices.resize(n);
+        auto writePos = layerOffsets;
+        for (int v = 0; v < n; ++v){
+            layerVertices[writePos[vertexLayer[v]]] = v;
+            writePos[vertexLayer[v]]++;
+        }
+    }
+
     SeparatorDecomposition decomp;   // The separator decomposition used to build this CCH.
     Permutation ranks;               // The position of each vertex in the contraction order.
     EliminationTree eliminationTree; // The associated elimination tree.
@@ -301,4 +395,8 @@ private:
     std::vector<int32_t> firstDownInputEdge; // The idx of the 1st downward input edge for each edge.
     std::vector<int32_t> upInputEdges;       // The upward input edges.
     std::vector<int32_t> downInputEdges;     // The downward input edges.
+
+    std::vector<int32_t> layerOffsets;  // Prefix sums delimiting per-layer vertex ranges.
+    std::vector<int32_t> layerVertices; // Vertices sorted by layer (depth in separator tree).
+    int32_t numLayers = 0;              // Number of layers in the separator tree.
 };

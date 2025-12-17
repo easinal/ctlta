@@ -110,7 +110,7 @@ private:
         const auto &cchGraph = cch.getUpwardGraph();
 #pragma omp parallel
 #pragma omp single nowait
-        cch.forEachVertexTopDown([&](int32_t rv) {
+        cch.forEachVertexTopDownByLayer([&](int32_t rv) {
             // Compute access node distances by using access node distances of upward neighbors
             computeAccessNodeDistancesForVertex(rv, cchGraph, cchUpWeights, rankToIdx, data.pos,
                                                 data.accessNodes, data.forwardDistances);
