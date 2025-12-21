@@ -84,8 +84,6 @@ private:
         const auto upWeights = upwardWeights();
         const auto downWeights = downwardWeights();
 
-#pragma omp parallel // parallelizes forEachVertexTopDown
-#pragma omp single nowait
         cch.forEachVertexTopDown([&](const int u) {
             // Do not build labels for truncated vertices.
             if (hierarchy.isVertexTruncated(u))

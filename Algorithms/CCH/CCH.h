@@ -19,17 +19,18 @@
 
 // A metric-independent customizable contraction hierarchy. It uses a nested dissection order
 // associated with a separator decomposition to order the vertices by importance.
-class CCH {
+template<bool ORDER_BY_LEVEL>
+class CCHBase {
 public:
-    using EliminationTree = std::vector<int32_t>;                             // The elimination tree.
-    using UpGraph = StaticGraph<VertexAttrs<>, EdgeAttrs<EdgeTailAttribute>>; // The upward graph.
-    using DownGraph = StaticGraph<VertexAttrs<>, EdgeAttrs<EdgeIdAttribute>>; // The downward graph.
+    using EliminationTree = std::vector<int32_t>; // The elimination tree.
+    using UpGraph = StaticGraph<VertexAttrs<>, EdgeAttrs<EdgeTailAttribute> >; // The upward graph.
+    using DownGraph = StaticGraph<VertexAttrs<>, EdgeAttrs<EdgeIdAttribute> >; // The downward graph.
 
     // Constructs an empty CCH.
-    CCH() = default;
+    CCHBase() = default;
 
     // Constructs a CCH from the specified binary file.
-    explicit CCH(std::ifstream &in) {
+    explicit CCHBase(std::ifstream &in) {
         readFrom(in);
     }
 
@@ -37,17 +38,20 @@ public:
     template<typename InputGraphT>
     void preprocess(const InputGraphT &inputGraph, const SeparatorDecomposition &sepDecomp) {
         assert(inputGraph.numVertices() == sepDecomp.order.size());
-        std::vector<unsigned int> order(sepDecomp.order.begin(), sepDecomp.order.end());
+        std::vector<unsigned int> tmpOrder(sepDecomp.order.begin(), sepDecomp.order.end());
         std::vector<unsigned int> tails(inputGraph.numEdges());
         std::vector<unsigned int> heads(inputGraph.numEdges());
         FORALL_VALID_EDGES(inputGraph, u, e) {
-                tails[e] = u;
-                heads[e] = inputGraph.edgeHead(e);
-            }
-        RoutingKit::CustomizableContractionHierarchy cch(order, tails, heads);
+            tails[e] = u;
+            heads[e] = inputGraph.edgeHead(e);
+        }
+        RoutingKit::CustomizableContractionHierarchy cch(tmpOrder, tails, heads);
 
         decomp = sepDecomp;
+        order.assign(tmpOrder.begin(), tmpOrder.end());
+        KASSERT(order.validate());
         ranks.assign(cch.rank.begin(), cch.rank.end());
+        KASSERT(ranks.validate());
         eliminationTree.assign(cch.elimination_tree_parent.begin(), cch.elimination_tree_parent.end());
         eliminationTree.back() = INVALID_VERTEX;
 
@@ -89,7 +93,8 @@ public:
         firstUpInputEdge.back() = upInputEdges.size();
         firstDownInputEdge.back() = downInputEdges.size();
 
-        buildLayering();
+        if constexpr (ORDER_BY_LEVEL)
+            reorderByLayers();
     }
 
     // Returns the separator decomposition used to build this CCH.
@@ -97,9 +102,13 @@ public:
         return decomp;
     }
 
+    const Permutation &getSepDecompToCCHGraphVertexMapping() const noexcept requires (ORDER_BY_LEVEL) {
+        return decompRankToCchGraphId;
+    }
+
     // Returns the order in which vertices were contracted.
     const Permutation &getContractionOrder() const noexcept {
-        return decomp.order;
+        return order;
     }
 
     // Returns the position of each vertex in the contraction order.
@@ -138,66 +147,85 @@ public:
                 return false;
         return true;
     }
-    
+
     template<typename CallableT>
-    void forEachVertexBottomUp(CallableT func) const {
-        forEachVertexBottomUp(0, upGraph.numVertices(), 0, func);
+    void forEachVertexBottomUp(CallableT func) const requires (!ORDER_BY_LEVEL) {
+        #pragma omp parallel
+        #pragma omp single nowait
+        forEachVertexBottomUpTree(0, upGraph.numVertices(), 0, func);
+    }
+
+    template<class SeqCallable, class ParaCallable>
+    void forEachVertexBottomUp(SeqCallable /* ignored */, ParaCallable func) const requires (!ORDER_BY_LEVEL) {
+        #pragma omp parallel
+        #pragma omp single nowait
+        forEachVertexBottomUpTree(0, upGraph.numVertices(), 0, func);
     }
 
 
-    template <class SeqCallable, class ParaCallable>
-    void forEachVertexBottomUpByLayer(SeqCallable Seqfunc, ParaCallable Parafunc) const {
+    template<class SeqCallable, class ParaCallable>
+    void forEachVertexBottomUp(SeqCallable Seqfunc, ParaCallable Parafunc) const requires (ORDER_BY_LEVEL) {
         assert(numLayers != 0 || upGraph.numVertices() == 0);
         if (numLayers == 0)
             return;
-        for (auto layer = 0; layer < numLayers; ++layer) {
-            const auto layerSize = layerOffsets[layer + 1] - layerOffsets[layer];
-            if (omp_get_num_threads()>1 && layerSize > 32 * omp_get_num_threads()) {
-#pragma omp parallel for schedule(dynamic)
-                for (auto i = layerOffsets[layer]; i < layerOffsets[layer + 1]; ++i){
-                    Parafunc(layerVertices[i]);
+        const int startSeqLayer = NumberOfThreads == 1 ? 0 : firstSequentialLayer;
+#pragma omp parallel
+        {
+            for (auto layer = 0; layer < startSeqLayer; ++layer) {
+#pragma omp for schedule(dynamic, 32)
+                for (auto v = layerOffsets[layer]; v < layerOffsets[layer + 1]; ++v) {
+                    Parafunc(v);
                 }
-            } else {
-                for (auto i = layerOffsets[layer]; i < layerOffsets[numLayers]; ++i){
-                    Seqfunc(layerVertices[i]);
-                }
-                break;
             }
+        }
+        // Process top layers sequentially
+        for (auto v = layerOffsets[startSeqLayer]; v < layerOffsets[numLayers]; ++v) {
+            Seqfunc(v);
         }
     }
 
-    template <class CallableT>
-    void forEachVertexBottomUpByLayer(CallableT func) const {
-        forEachVertexBottomUpByLayer(func, func);
+    template<class CallableT>
+    void forEachVertexBottomUp(CallableT func) const requires (ORDER_BY_LEVEL) {
+        forEachVertexBottomUp(func, func);
     }
 
     template<typename CallableT>
-    void forEachVertexTopDown(CallableT func) const {
-        forEachVertexTopDown(0, upGraph.numVertices(), 0, func);
+    void forEachVertexTopDown(CallableT func) const requires (!ORDER_BY_LEVEL) {
+#pragma omp parallel
+#pragma omp single nowait
+        forEachVertexTopDownTree(0, upGraph.numVertices(), 0, func);
     }
 
-    template <class SeqCallable, class ParaCallable>
-    void forEachVertexTopDownByLayer(SeqCallable Seqfunc, ParaCallable Parafunc) const {
+    template<class SeqCallable, class ParaCallable>
+    void forEachVertexTopDown(SeqCallable /*ignored*/, ParaCallable func) const requires (!ORDER_BY_LEVEL) {
+#pragma omp parallel
+#pragma omp single nowait
+        forEachVertexTopDownTree(0, upGraph.numVertices(), 0, func);
+    }
+
+    template<class SeqCallable, class ParaCallable>
+    void forEachVertexTopDown(SeqCallable Seqfunc, ParaCallable Parafunc) const requires (ORDER_BY_LEVEL) {
         assert(numLayers != 0 || upGraph.numVertices() == 0);
-        for (auto layer = numLayers - 1; layer >= 0; --layer) {
-            const auto layerSize = layerOffsets[layer + 1] - layerOffsets[layer];
-            if (omp_get_num_threads()>1 && layerSize > 32 * omp_get_num_threads()) {
-                #pragma omp parallel for schedule(dynamic)
-                for (auto i = layerOffsets[layer+1]-1; i >= layerOffsets[layer]; --i){
-                    Parafunc(layerVertices[i]);
+        const int lastSeqLayer = NumberOfThreads == 1 ? 0 : firstSequentialLayer;
+        for (auto v = layerOffsets[numLayers] - 1; v >= layerOffsets[lastSeqLayer]; --v) {
+            Seqfunc(v);
+        }
+#pragma omp parallel
+        {
+            for (auto layer = lastSeqLayer - 1; layer >= 0; --layer) {
+#pragma omp for schedule(dynamic, 32)
+                for (auto v = layerOffsets[layer + 1] - 1; v >= layerOffsets[layer]; --v) {
+                    Parafunc(v);
                 }
-            } else {
-                for (auto i = layerOffsets[layer+1]-1; i >= layerOffsets[0]; --i)
-                    Seqfunc(layerVertices[i]);
-                break;
             }
         }
     }
+
     template<typename CallableT>
-    void forEachVertexTopDownByLayer(CallableT func) const {
-        forEachVertexTopDownByLayer(func, func);
+    void forEachVertexTopDown(CallableT func) const requires (ORDER_BY_LEVEL) {
+        forEachVertexTopDown(func, func);
     }
-    
+
     // Applies func to each lower triangle of the specified edge.
     template<typename CallableT>
     bool forEachLowerTriangle(const int tail, const int head, const int edge, CallableT func) const {
@@ -261,7 +289,7 @@ public:
         bio::read(in, upInputEdges);
         bio::read(in, downInputEdges);
 
-        buildLayering();
+        reorderByLayers();
     }
 
     // Writes the CCH to the specified binary file.
@@ -288,8 +316,7 @@ public:
                + firstDownInputEdge.size() * sizeof(int32_t)
                + upInputEdges.size() * sizeof(int32_t)
                + downInputEdges.size() * sizeof(int32_t)
-               + layerOffsets.size() * sizeof(int32_t)
-               + layerVertices.size() * sizeof(int32_t);
+               + layerOffsets.size() * sizeof(int32_t);
     }
 
 private:
@@ -297,7 +324,7 @@ private:
     // That is, func is applied to a vertex after it has been applied to each downward neighbor. If
     // this member function is called in a parallel region, the function calls are parallelized.
     template<typename CallableT>
-    void forEachVertexBottomUp(int from, int to, const int node, CallableT func) const {
+    void forEachVertexBottomUpTree(int from, int to, const int node, CallableT func) const {
         assert(to == decomp.lastSeparatorVertex(node));
         assert(from >= 0);
         assert(from <= to);
@@ -308,7 +335,7 @@ private:
         } else {
             for (auto child = decomp.leftChild(node); child != 0; child = decomp.rightSibling(child)) {
 #pragma omp task
-                forEachVertexBottomUp(from, decomp.lastSeparatorVertex(child), child, func);
+                forEachVertexBottomUpTree(from, decomp.lastSeparatorVertex(child), child, func);
                 from = decomp.lastSeparatorVertex(child);
             }
 #pragma omp taskwait
@@ -321,7 +348,7 @@ private:
     // That is, func is applied to a vertex after it has been applied to each upward neighbor. If
     // this member function is called in a parallel region, the function calls are parallelized.
     template<typename CallableT>
-    void forEachVertexTopDown(int from, int to, const int node, CallableT func) const {
+    void forEachVertexTopDownTree(int from, int to, const int node, CallableT func) const {
         assert(to == decomp.lastSeparatorVertex(node));
         assert(from >= 0);
         assert(from <= to);
@@ -334,69 +361,189 @@ private:
                 func(v);
             for (auto child = decomp.leftChild(node); child != 0; child = decomp.rightSibling(child)) {
 #pragma omp task
-                forEachVertexTopDown(from, decomp.lastSeparatorVertex(child), child, func);
+                forEachVertexTopDownTree(from, decomp.lastSeparatorVertex(child), child, func);
                 from = decomp.lastSeparatorVertex(child);
             }
         }
     }
 
-    void buildLayering() {
+    void reorderByLayers() {
+        const auto n = upGraph.numVertices();
+
+        // Compute layer of every vertex, and number of layers
+        const auto vertexLayer = computeLayerOfVertices();
+
+        // Compute number of vertices per layer and generate start offsets by prefix sum.
         layerOffsets.clear();
-        layerVertices.clear();
+        layerOffsets.assign(numLayers + 1, 0);
+        for (const auto layer: vertexLayer)
+            ++layerOffsets[layer];
+
+        int sum = 0;
+        for (int i = 0; i < numLayers; ++i) {
+            std::swap(sum, layerOffsets[i]);
+            sum += layerOffsets[i];
+        }
+        layerOffsets[numLayers] = sum;
+        KASSERT(sum == n);
+
+        // TODO: better order within layer?
+        // Find new ID of every vertex
+        Permutation vertexPerm(n);
+        for (int v = 0; v < n; ++v)
+            vertexPerm[v] = layerOffsets[vertexLayer[v]]++;
+        KASSERT(vertexPerm.validate());
+        // Restore offsets
+        int cur = 0;
+        for (int i = 0; i < numLayers; ++i)
+            std::swap(cur, layerOffsets[i]);
+        KASSERT(cur == n);
+
+
+        // Permute upGraph and downGraph, retrieve mapping of edges in upGraph
+        Permutation edgePerm;
+        upGraph.permuteVertices(vertexPerm, edgePerm);
+        downGraph.permuteVertices(vertexPerm);
+
+        // Update mapping from downGraph edges to upGraph edges
+        FORALL_EDGES(downGraph, e) {
+            downGraph.edgeId(e) = edgePerm[downGraph.edgeId(e)];
+        }
+
+        // Update vertex IDs in ranks
+        for (int v = 0; v < n; ++v) {
+            ranks[v] = vertexPerm[ranks[v]];
+        }
+
+        // Update vertex IDs in order
+        order = ranks.getInversePermutation();
+
+        // Update vertex IDs in elimination tree
+        EliminationTree newElimTree(n);
+        for (int v = 0; v < n; ++v) {
+            const int oldChild = v;
+            const int oldParent = eliminationTree[v];
+            if (oldParent == INVALID_VERTEX) {
+                newElimTree[vertexPerm[oldChild]] = INVALID_VERTEX;
+                continue;
+            }
+            newElimTree[vertexPerm[oldChild]] = vertexPerm[oldParent];
+        }
+        eliminationTree = std::move(newElimTree);
+
+        for (int v = 0; v < n; ++v) {
+            KASSERT(eliminationTree[v] == INVALID_VERTEX || v < eliminationTree[v]);
+        }
+
+
+        // Reorder input edge information for new edge IDs
+        const auto newEdgeToOldEdge = edgePerm.getInversePermutation();
+        std::vector<int32_t> firstInputEdge;
+        std::vector<int32_t> inputEdges;
+        const auto m = upGraph.numEdges();
+        KASSERT(firstUpInputEdge.size() == m + 1);
+        firstInputEdge.resize(firstUpInputEdge.size());
+        firstInputEdge[0] = 0;
+        inputEdges.reserve(upInputEdges.size());
+        for (int e = 0; e < m; ++e) {
+            const int oldEdge = newEdgeToOldEdge[e];
+            const auto first = firstUpInputEdge[oldEdge];
+            const auto last = firstUpInputEdge[oldEdge + 1];
+            firstInputEdge[e + 1] = inputEdges.size() + last - first;
+            inputEdges.insert(inputEdges.end(), upInputEdges.begin() + first, upInputEdges.begin() + last);
+        }
+        KASSERT(inputEdges.size() == upInputEdges.size());
+        KASSERT(firstInputEdge.back() == inputEdges.size());
+        firstUpInputEdge = std::move(firstInputEdge);
+        upInputEdges = std::move(inputEdges);
+
+        inputEdges.clear();
+        KASSERT(firstDownInputEdge.size() == m + 1);
+        firstInputEdge.resize(firstDownInputEdge.size());
+        firstInputEdge[0] = 0;
+        inputEdges.reserve(downInputEdges.size());
+        for (int e = 0; e < m; ++e) {
+            const int oldEdge = newEdgeToOldEdge[e];
+            const auto first = firstDownInputEdge[oldEdge];
+            const auto last = firstDownInputEdge[oldEdge + 1];
+            firstInputEdge[e + 1] = inputEdges.size() + last - first;
+            inputEdges.insert(inputEdges.end(), downInputEdges.begin() + first, downInputEdges.begin() + last);
+        }
+        KASSERT(inputEdges.size() == downInputEdges.size());
+        KASSERT(firstInputEdge.back() == inputEdges.size());
+        firstDownInputEdge = std::move(firstInputEdge);
+        downInputEdges = std::move(inputEdges);
+
+        // Remember vertex permutation to allow mapping from separator decomposition to new graph ordering.
+        decompRankToCchGraphId = std::move(vertexPerm);
+
+
+        // Set first layer to be processed sequentially based on size
+        firstSequentialLayer = 0;
+        while (firstSequentialLayer < numLayers && layerOffsets[firstSequentialLayer + 1] - layerOffsets[
+                   firstSequentialLayer] >= MIN_SIZE_PARALLEL_LAYER)
+            ++firstSequentialLayer;
+    }
+
+    std::vector<int32_t> computeLayerOfVertices() {
         numLayers = 0;
 
         const int n = upGraph.numVertices();
-        if (n == 0)
-            return;
 
         std::vector<int32_t> vertexLayer(n, 0);
         int32_t maxLayer = 0;
         for (int u = 0; u < n; ++u) {
             const int32_t baseLayer = vertexLayer[u];
 
-            const auto propagate = [&](const int v) {
+            for (int e = upGraph.firstEdge(u); e != upGraph.lastEdge(u); ++e) {
+                const auto v = upGraph.edgeHead(e);
                 const int32_t candidate = baseLayer + 1;
                 if (candidate > vertexLayer[v]) {
                     vertexLayer[v] = candidate;
                     if (candidate > maxLayer)
                         maxLayer = candidate;
                 }
-            };
-
-            for (int e = upGraph.firstEdge(u); e != upGraph.lastEdge(u); ++e)
-                propagate(upGraph.edgeHead(e));
+            }
         }
 
         numLayers = maxLayer + 1;
-
-        layerOffsets.assign(numLayers + 1, 0);
-        for (const auto layer : vertexLayer)
-            ++layerOffsets[layer + 1];
-        for (int i = 0; i < numLayers; ++i){
-            layerOffsets[i + 1] += layerOffsets[i];
-        }
-
-        layerVertices.resize(n);
-        auto writePos = layerOffsets;
-        for (int v = 0; v < n; ++v){
-            layerVertices[writePos[vertexLayer[v]]] = v;
-            writePos[vertexLayer[v]]++;
-        }
+        return vertexLayer;
     }
 
-    SeparatorDecomposition decomp;   // The separator decomposition used to build this CCH.
-    Permutation ranks;               // The position of each vertex in the contraction order.
+    SeparatorDecomposition decomp; // The separator decomposition used to build this CCH.
+
+    // Permutation from vertex IDs in the separator decomposition to vertex IDs in the CCH graph.
+    // Only used if CCH graph is reordered according to layers.
+    Permutation decompRankToCchGraphId;
+
+    // The contraction order. If this is a layer CCH, this is not the order that vertices were contracted in but it
+    // contains all vertices of the input graph ordered by layer (lower layers first).
+    // Use this to map vertex IDs in the CCH graph to vertex IDs in the input graph.
+    Permutation order;
+
+    // The position of each vertex in the contraction order. If this is a layer CCH, this is not the position in the
+    // contraction order but the position in an order by layer (lower layers first).
+    // Use this to map vertex IDs in the input graph to vertex IDs in the CCH graph.
+    Permutation ranks;
+
     EliminationTree eliminationTree; // The associated elimination tree.
 
-    UpGraph upGraph;     // The upward graph.
+    UpGraph upGraph; // The upward graph.
     DownGraph downGraph; // The downward graph.
 
-    std::vector<int32_t> firstUpInputEdge;   // The idx of the 1st upward input edge for each edge.
+    std::vector<int32_t> firstUpInputEdge; // The idx of the 1st upward input edge for each edge.
     std::vector<int32_t> firstDownInputEdge; // The idx of the 1st downward input edge for each edge.
-    std::vector<int32_t> upInputEdges;       // The upward input edges.
-    std::vector<int32_t> downInputEdges;     // The downward input edges.
+    std::vector<int32_t> upInputEdges; // The upward input edges.
+    std::vector<int32_t> downInputEdges; // The downward input edges.
 
-    std::vector<int32_t> layerOffsets;  // Prefix sums delimiting per-layer vertex ranges.
-    std::vector<int32_t> layerVertices; // Vertices sorted by layer (depth in separator tree).
-    int32_t numLayers = 0;              // Number of layers in the separator tree.
+    int32_t numLayers = 0; // Number of layers in the CCH graph. Only used if ordered by layers.
+    std::vector<int32_t> layerOffsets;
+    // Prefix sums delimiting per-layer vertex ranges. Only used if ordered by layers.
+
+    static constexpr int NumberOfThreads = NUM_THREADS;
+    static constexpr int MIN_SIZE_PARALLEL_LAYER = NumberOfThreads * 32;
+    int32_t firstSequentialLayer;
 };
+
+using CCH = CCHBase<false>;
+using LayerCCH = CCHBase<true>;

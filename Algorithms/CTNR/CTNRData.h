@@ -119,7 +119,7 @@ private:
         distanceTable[indexS * distanceTableRowSize + indexT] = distance;
     }
 
-
+    template<typename>
     friend class CTNRMetric;
 
     friend class CTNRPreprocessor;

@@ -480,8 +480,9 @@ public:
         RUN_FORALL(EdgeAttributes::values.resize(numEdges()));
     }
 
-    // Reorders the vertices according to the specified permutation.
-    void permuteVertices(const Permutation &perm) {
+    // Reorders the vertices according to the specified permutation. Writes resulting permutation of edge IDs
+    // to edgePerm (maps old edge IDs to new edge IDs).
+    void permuteVertices(const Permutation& perm, Permutation& edgePerm) {
         assert(perm.size() == numVertices());
         assert(perm.validate());
         if (dynamic) {
@@ -490,7 +491,7 @@ public:
             AlignedVector<OutEdgeRange> temp(outEdges.size());
             temp.back().first() = numEdges();
             Permutation inversePerm = perm.getInversePermutation();
-            Permutation edgePerm(numEdges());
+            edgePerm = Permutation(numEdges());
             int newEdgeIdx = 0;
 
             // Sort the edge arrays by new tail ID.
@@ -511,6 +512,14 @@ public:
         // Update edge heads.
         for (auto &head: edgeHeads)
             head = perm[head];
+
+        assert(edgePerm.validate());
+    }
+
+    // Reorders the vertices according to the specified permutation.
+    void permuteVertices(const Permutation &perm) {
+        Permutation temp;
+        permuteVertices(perm, temp);
     }
 
     // Removes all vertices and edges that do not lie in the vertex-induced subgraph specified by the

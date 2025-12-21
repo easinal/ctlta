@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <climits>
 
-template<typename InputGraphT>
 class CTNRQuery {
 public:
     using LabelSet = BasicLabelSet<0, ParentInfo::NO_PARENT_INFO>;
@@ -18,7 +17,7 @@ public:
     // Constructor
     CTNRQuery(const TransitNodeHierarchy &hierarchy, CTNRData &data,
               const std::vector<int>& localEliminationTree,
-              const CCH::UpGraph &cchGraph,
+              const LayerCCH::UpGraph &cchGraph,
               int const * const cchUpWeights,
               int const * const cchDownWeights)
             : hierarchy(hierarchy),

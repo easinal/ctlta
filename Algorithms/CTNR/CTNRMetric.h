@@ -23,13 +23,13 @@
 #include <iostream>
 #include <boost/dynamic_bitset.hpp>
 
-
+template<typename CchT>
 class CTNRMetric {
 
 public:
 
     // Constructor
-    CTNRMetric(const TransitNodeHierarchy &hierarchy, const CCH &cch,
+    CTNRMetric(const TransitNodeHierarchy &hierarchy, const CchT &cch,
                const std::vector<AccessNodeEdge> &accessNodeEdges,
                const int32_t *const inputWeights,
                const ctnr::Level pruneLevelThreshold = 0)
@@ -73,7 +73,7 @@ public:
 
     const std::vector<int32_t> &getLocalEliminationTree() const { return localEliminationTree; }
 
-    const CCHMetric &getCCHMetric() const { return cchMetric; }
+    const LayerCCHMetric &getCCHMetric() const { return cchMetric; }
 
     // Memory usage calculation including node levels
     uint64_t sizeInBytes() const {
@@ -108,9 +108,7 @@ private:
         std::cout << "Pruning access nodes for vertices of level < " << (int) pruneLevelThreshold << std::endl;
         // TODO: Debug for USA network
         const auto &cchGraph = cch.getUpwardGraph();
-#pragma omp parallel
-#pragma omp single nowait
-        cch.forEachVertexTopDownByLayer([&](int32_t rv) {
+        cch.forEachVertexTopDown([&](int32_t rv) {
             // Compute access node distances by using access node distances of upward neighbors
             computeAccessNodeDistancesForVertex(rv, cchGraph, cchUpWeights, rankToIdx, data.pos,
                                                 data.accessNodes, data.forwardDistances);
@@ -215,10 +213,10 @@ private:
     }
 
     const TransitNodeHierarchy &hierarchy;
-    const CCH &cch;
+    const CchT &cch;
     const std::vector<AccessNodeEdge> &accessNodeEdges;
     const ctnr::Level pruneLevelThreshold;
-    CCHMetric cchMetric;
+    BaseCCHMetric<CchT> cchMetric;
 
     // Minimum CH restricted to non-transit nodes for local queries.
 //    CH localMinCH;

@@ -14,14 +14,23 @@ class TransitNodeHierarchy {
     using SideId = uint64_t;
     using TransitNodeId = ctnr::TransitNodeId;
     using Level = ctnr::Level;
+
+    struct Identity {
+        int operator[](const int x) const {
+            return x;
+        }
+    };
+
 public:
 
     TransitNodeHierarchy() = default;
 
-    // Builds the metric-independent CCH for the specified graph and separator decomposition.
-    template<typename InputGraphT>
-    void preprocess(const InputGraphT &inputGraph, const SeparatorDecomposition &sepDecomp,
-                    const int newTransitNodeThreshold) {
+    // Builds the transit node hierarchy for the specified graph and separator decomposition.
+    // If specified, applies a permutation to the vertex IDs in the separator decomposition before processing them.
+    // This is useful if the CCH graph uses a different vertex ordering.
+    template<typename InputGraphT, typename PermuteVertexIdT = Identity>
+    void preprocess(const InputGraphT &inputGraph, const int newTransitNodeThreshold,
+                    const SeparatorDecomposition &sepDecomp, const PermuteVertexIdT& permuteVertexId = {}) {
 
         const auto sdDepth = computeSepDecompDepth(sepDecomp);
         std::cout << "Depth of sepDecomp is " << sdDepth << std::endl;
@@ -40,7 +49,7 @@ public:
         transitNodes.clear();
         transitNodeIndexOfRank.assign(inputGraph.numVertices(), -1);
 
-        computeVertexLocationInSepDecomp(sepDecomp);
+        computeVertexLocationInSepDecomp(sepDecomp, permuteVertexId);
 
         KASSERT(std::all_of(packedSideIds.begin(), packedSideIds.end(),
                             [](const uint64_t &id) { return id != static_cast<uint64_t>(-1); }));
@@ -183,7 +192,8 @@ private:
     }
 
     // Finds depth, side bitvector, and truncation flag of each vertex.
-    void computeVertexLocationInSepDecomp(const SeparatorDecomposition &sd) {
+    template<typename PermuteVertexIdT>
+    void computeVertexLocationInSepDecomp(const SeparatorDecomposition &sd, const PermuteVertexIdT& permuteVertexId) {
 
 
         std::stack<bool> doneWithLeftChild;
@@ -192,7 +202,8 @@ private:
         SideId packedSideId = 0;
 
         // Set location info for root node separator vertices
-        for (auto v = sd.lastSeparatorVertex(0) - 1; v >= sd.firstSeparatorVertex(0); --v) {
+        for (auto vSd = sd.lastSeparatorVertex(0) - 1; vSd >= sd.firstSeparatorVertex(0); --vSd) {
+            const auto v = permuteVertexId[vSd];
             vertexLevel[v] = 0;
             packedSideIds[v] = packedSideId;
             if (0 < transitNodeThreshold)
@@ -207,7 +218,8 @@ private:
             setBit(packedSideId, depth - 1, doneWithLeftChild.top());
 
             // Set location info for separator vertices at child.
-            for (auto v = sd.lastSeparatorVertex(child) - 1; v >= sd.firstSeparatorVertex(child); --v) {
+            for (auto vSd = sd.lastSeparatorVertex(child) - 1; vSd >= sd.firstSeparatorVertex(child); --vSd) {
+            const auto v = permuteVertexId[vSd];
                 vertexLevel[v] = depth;
                 packedSideIds[v] = packedSideId;
                 if (depth < transitNodeThreshold)
@@ -251,7 +263,7 @@ private:
 
 
     std::vector<SideId> packedSideIds; // store which side each vertex is on in each level of separator hierarchy
-    std::vector<Level> vertexLevel; // Map rank in separator decomposition of reach vertex to its level in the SD
+    std::vector<Level> vertexLevel; // Map each vertex to its level in the SD
 
     // The small subset of vertices in the transitNodeThreshold highest levels make up the transit nodes.
     // Every transit node gets an internal index in [0, numTransitNodes-1] for distance table lookup.

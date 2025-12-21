@@ -20,14 +20,15 @@
 
 // This class encodes the actual cost of the edges in a customizable contraction hierarchy. It
 // stores the edge weights and contains several sequential and parallel customization algorithms.
-class CCHMetric {
+template<typename CchT>
+class BaseCCHMetric {
 
     template<typename, typename, bool>
     friend class CTLMetric;
 
  public:
   // Constructs an individual metric incorporating the specified input weights in the specified CCH.
-  CCHMetric(const CCH& cch, const int32_t* const inputWeights)
+  BaseCCHMetric(const CchT& cch, const int32_t* const inputWeights)
       : cch(cch), inputWeights(inputWeights) {
     assert(inputWeights != nullptr);
     upWeights.resize(cch.getUpwardGraph().numEdges());
@@ -101,6 +102,7 @@ class CCHMetric {
 
  private:
 
+    template<typename>
     friend class CTNRMetric;
 
   // Computes a respecting metric.
@@ -126,9 +128,7 @@ class CCHMetric {
 
   // Computes a customized metric given a respecting one.
   void computeCustomizedMetric() noexcept {
-    #pragma omp parallel
-    #pragma omp single nowait
-    cch.forEachVertexBottomUpByLayer([&](const int u) {
+    cch.forEachVertexBottomUp([&](const int u) {
       FORALL_INCIDENT_EDGES(cch.getUpwardGraph(), u, lower) {
         const int v = cch.getUpwardGraph().edgeHead(lower);
         cch.forEachUpperTriangle(u, v, lower, [&](int, const int inter, const int upper) {
@@ -188,9 +188,7 @@ class CCHMetric {
   // Runs the perfect customization algorithm.
   template <typename T1, typename T2>
   void runPerfectCustomization(T1 markUpEdgeForRemoval, T2 markDownEdgeForRemoval) noexcept {
-    #pragma omp parallel
-    #pragma omp single nowait
-    cch.forEachVertexTopDownByLayer([&](const int u) {
+    cch.forEachVertexTopDown([&](const int u) {
       FORALL_INCIDENT_EDGES(cch.getUpwardGraph(), u, lower) {
         const int v = cch.getUpwardGraph().edgeHead(lower);
         cch.forEachUpperTriangle(u, v, lower, [&](int, const int inter, const int upper) {
@@ -349,9 +347,12 @@ class CCHMetric {
     return {std::move(upGraph), std::move(downGraph), std::move(order), std::move(ranks)};
   }
 
-  const CCH& cch;                    // The associated CCH.
+  const CchT& cch;                    // The associated CCH.
   const int32_t* const inputWeights; // The weights of the input edges.
 
   std::vector<int32_t> upWeights;   // The upward weights of the edges in the CCH.
   std::vector<int32_t> downWeights; // The downward weights of the edges in the CCH.
 };
+
+using CCHMetric = BaseCCHMetric<CCH>;
+using LayerCCHMetric = BaseCCHMetric<LayerCCH>;

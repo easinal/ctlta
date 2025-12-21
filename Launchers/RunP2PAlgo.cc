@@ -96,7 +96,7 @@ inline void writeHeaderLine(std::ofstream &out, AlgoT &) {
 }
 
 template<>
-inline void writeHeaderLine(std::ofstream &out, CTNRQuery<InputGraph> &) {
+inline void writeHeaderLine(std::ofstream &out, CTNRQuery &) {
     out << "distance,query_time,mode" << '\n';
 }
 
@@ -112,7 +112,7 @@ inline void writeRecordLine(std::ofstream &out, Dij &algo, const int dst, const 
 }
 
 template<>
-inline void writeRecordLine(std::ofstream &out, CTNRQuery<InputGraph> &algo, const int, const int64_t elapsed) {
+inline void writeRecordLine(std::ofstream &out, CTNRQuery &algo, const int, const int64_t elapsed) {
     out << algo.getDistance() << ',' << elapsed << ',' << algo.getLastMode() << '\n';
 }
 
@@ -356,7 +356,7 @@ inline void runQueries(const CommandLineParser &clp) {
         sepFile.close();
 
         // Build CCH and tree hierarchy
-        CCH cch;
+        LayerCCH cch;
         cch.preprocess(graph, sepDecomp);
 //        std::cout << "Finished CCH preprocessing" << std::endl;
 
@@ -364,16 +364,16 @@ inline void runQueries(const CommandLineParser &clp) {
         int pruneThreshold = clp.getValue<int>("ctnr-prune-thresh", 0);
 
         TransitNodeHierarchy hierarchy;
-        hierarchy.preprocess(graph, sepDecomp, levelThreshold); // first levelThreshold levels are transit nodes
+        hierarchy.preprocess(graph, levelThreshold, sepDecomp, cch.getSepDecompToCCHGraphVertexMapping()); // first levelThreshold levels are transit nodes
 //        std::cout << "Finished TransitNodeHierarchy preprocessing" << std::endl;
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
-        CTNRPreprocessor preprocessor(hierarchy, cch);
-        CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+        CTNRPreprocessor preprocessor;
+        CTNRMetric<LayerCCH> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
                                        useLengths ? &graph.length(0) : &graph.travelTime(0), pruneThreshold);
 
         // Preprocess CTNR
-        preprocessor.preprocess(data);
+        preprocessor.preprocess(hierarchy, cch, data);
         std::cout << "Finished preprocessing" << std::endl;
         // Customize CTNR
         metric.customize(data);
@@ -383,7 +383,7 @@ inline void runQueries(const CommandLineParser &clp) {
         // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
 
         // Use generic runQueries with CTNRQuery; pass CCH rank IDs to the algo
-        CTNRQuery<InputGraph> algo(hierarchy, data, metric.getLocalEliminationTree(), cch.getUpwardGraph(),
+        CTNRQuery algo(hierarchy, data, metric.getLocalEliminationTree(), cch.getUpwardGraph(),
                                    metric.getCCHMetric().upwardWeights(), metric.getCCHMetric().downwardWeights());
 
         outputFile << "# Memory usage CCH: " << (cch.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
@@ -673,16 +673,17 @@ inline void runPreprocessing(const CommandLineParser &clp) {
 
         Timer timer;
         // Build CCH and tree hierarchy
-        CCH cch;
+        LayerCCH cch;
         cch.preprocess(graph, decomp);
 
         TransitNodeHierarchy hierarchy;
-        hierarchy.preprocess(graph, decomp, levelThreshold); // first levelThreshold levels are transit nodes
+        // first levelThreshold levels of separator decomposition are transit nodes
+        hierarchy.preprocess(graph, levelThreshold, decomp, cch.getSepDecompToCCHGraphVertexMapping());
 
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
-        CTNRPreprocessor preprocessor(hierarchy, cch);
-        preprocessor.preprocess(data);
+        CTNRPreprocessor preprocessor;
+        preprocessor.preprocess(hierarchy, cch, data);
 
         const auto preprocessTime = timer.elapsed<std::chrono::microseconds>();
         outputFile << "# Preprocess time (for given sepdecomp): " << preprocessTime << " microseconds.\n";
@@ -692,7 +693,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         int64_t cchBasicCustom, distTableComp, accessNodeComp, tot;
         timer.restart();
         for (auto i = 0; i < numCustomRuns; ++i) {
-            CTNRMetric metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+            CTNRMetric<LayerCCH> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
                                            useLengths ? &graph.length(0) : &graph.travelTime(0), pruneThreshold);
             timer.restart();
             metric.customizeWithMeasurements(data, cchBasicCustom, distTableComp, accessNodeComp);

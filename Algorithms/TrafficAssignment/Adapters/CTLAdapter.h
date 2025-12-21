@@ -197,8 +197,6 @@ namespace trafficassignment {
         template<typename SearchGraphT, typename std::enable_if<SearchGraphT::template has<UnpackingInfoAttribute>()>::type...>
         void propagateFlowsToInputEdgesImpl(AlignedVector<int> &flowsOnInputEdges, const SearchGraphT &upGraph,
                                             const SearchGraphT &downGraph) {
-#pragma omp parallel // parallelizes callbacks within cch.forEachVertexTopDown.
-#pragma omp single nowait
             cch.forEachVertexTopDown([&](const int &u) {
                 FORALL_INCIDENT_EDGES(upGraph, u, e)if (upGraph.unpackingInfo(e).second == INVALID_EDGE) {
                         flowsOnInputEdges[upGraph.unpackingInfo(e).first] = flowsOnUpEdges[e];
@@ -228,8 +226,6 @@ namespace trafficassignment {
             // input edge if e is not a shortcut).
             const auto &upWeights = metric.upwardWeights();
             const auto &downWeights = metric.downwardWeights();
-#pragma omp parallel // parallelizes callbacks within cch.forEachVertexTopDown.
-#pragma omp single nowait
             cch.forEachVertexTopDown([&](const int &v) {
                 FORALL_INCIDENT_EDGES(upGraph, v, e) {
                     const auto tail = upGraph.edgeTail(e);

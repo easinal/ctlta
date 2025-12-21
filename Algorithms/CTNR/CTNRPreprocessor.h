@@ -5,20 +5,21 @@ class CTNRPreprocessor {
 
 public:
 
-    CTNRPreprocessor(const TransitNodeHierarchy &hierarchy, const CCH &cch)
-            : hierarchy(hierarchy), cch(cch) {
-        // Convert elimination tree to out-tree format
-        convertInTreeToOutTree(cch.getEliminationTree(), elimTreeFirstChild, elimTreeChildren);
-    }
+    CTNRPreprocessor() = default;
 
     const std::vector<AccessNodeEdge>& getAccessNodeEdges() const {
         return accessNodeEdges;
     }
 
     // Determines access nodes of each vertex and allocates distance entries.
-    void preprocess(CTNRData &data) {
+    template<typename CchT>
+    void preprocess(const TransitNodeHierarchy &hierarchy, const CchT& cch, CTNRData &data) {
 
         int numVertices = cch.getUpwardGraph().numVertices();
+        std::vector<int32_t> elimTreeFirstChild;
+        std::vector<int32_t> elimTreeChildren;
+        convertInTreeToOutTree(cch.getEliminationTree(), elimTreeFirstChild, elimTreeChildren);
+
 
         const auto rankToIdx = [&](const int r) {
             return data.rankToIdx(r);
@@ -26,14 +27,14 @@ public:
 
         // Debug output:
         std::vector<int32_t> numTransitNodesToRoot(cch.getUpwardGraph().numVertices());
-        countTransitNodesToRoot(numTransitNodesToRoot, rankToIdx);
+        countTransitNodesToRoot(numTransitNodesToRoot, rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
         std::cout << "CTNR: Average number of transit nodes to root: "
                   << static_cast<double>(std::accumulate(numTransitNodesToRoot.begin(), numTransitNodesToRoot.end(), 0))
                      / numVertices << std::endl;
 
         // Count number of access nodes per vertex
         data.pos.resize(numVertices + 1);
-        countMetricIndependentAccessNodes(data.pos, cch.getUpwardGraph(), rankToIdx);
+        countMetricIndependentAccessNodes(data.pos, cch.getUpwardGraph(), rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
 
         if constexpr (CTNRData::USE_SIMD) {
             // Pad counts to multiple of SIMD width
@@ -57,7 +58,7 @@ public:
         data.forwardDistances.resize(sum);
         data.backwardDistances.resize(sum);
 
-        writeMetricIndependentAccessNodes(data.pos, data.accessNodes, cch.getUpwardGraph(), rankToIdx);
+        writeMetricIndependentAccessNodes(data.pos, data.accessNodes, cch.getUpwardGraph(), rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
 
         std::sort(accessNodeEdges.begin(), accessNodeEdges.end(), [](const AccessNodeEdge &a, const AccessNodeEdge &b) {
             return a.edge < b.edge;
@@ -70,8 +71,6 @@ public:
 
     uint64_t sizeInBytes() const {
         uint64_t size = sizeof(CTNRPreprocessor);
-        size += elimTreeFirstChild.size() * sizeof(decltype(elimTreeFirstChild)::value_type);
-        size += elimTreeChildren.size() * sizeof(decltype(elimTreeChildren)::value_type);
         size += accessNodeEdges.size() * sizeof(decltype(accessNodeEdges)::value_type);
         return size;
     }
@@ -153,7 +152,10 @@ private:
 
     template<typename GraphT, typename RankToIdxT>
     void countMetricIndependentAccessNodes(std::vector<int32_t> &outCounts, const GraphT &upGraph,
-                                           const RankToIdxT &rankToIdx) const {
+    const RankToIdxT &rankToIdx,
+    const TransitNodeHierarchy &hierarchy,
+    const std::vector<int32_t> &elimTreeFirstChild,
+    const std::vector<int32_t> &elimTreeChildren) const {
 
         KASSERT(outCounts.size() == upGraph.numVertices() + 1);
 
@@ -200,7 +202,10 @@ private:
     template<typename GraphT, typename RankToIdxT>
     void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos, std::vector<ctnr::TransitNodeId> &entries,
                                            const GraphT &upGraph,
-                                           const RankToIdxT &rankToIdx) {
+                                           const RankToIdxT &rankToIdx,
+    const TransitNodeHierarchy &hierarchy,
+                                const std::vector<int32_t> &elimTreeFirstChild,
+                                const std::vector<int32_t> &elimTreeChildren) {
 
         KASSERT(pos.size() == upGraph.numVertices() + 1);
         std::vector<int> curNumEntries(upGraph.numVertices(), 0);
@@ -256,7 +261,10 @@ private:
 
     template<typename RankToIdxT>
     void countTransitNodesToRoot(std::vector<int32_t> &outCounts,
-                                const RankToIdxT &rankToIdx) const {
+                                const RankToIdxT &rankToIdx,
+    const TransitNodeHierarchy &hierarchy,
+                                const std::vector<int32_t> &elimTreeFirstChild,
+                                const std::vector<int32_t> &elimTreeChildren) const {
 
         int curCount = 0;
         const int root = outCounts.size() - 1;
@@ -280,14 +288,6 @@ private:
 
         dfsOnTree(elimTreeFirstChild, elimTreeChildren, recurse, backtrack);
     }
-
-
-    const TransitNodeHierarchy &hierarchy;
-    const CCH &cch;
-
-    // CCH elimination as out-tree
-    std::vector<int> elimTreeFirstChild;
-    std::vector<int> elimTreeChildren;
 
     // Information on edges leading from non-transit nodes directly to access nodes which is a special case during
     // customization.
