@@ -11,6 +11,7 @@
 #include <string>
 
 #include <csv.h>
+#include <kassert/kassert.hpp>
 
 #include "Algorithms/Dijkstra/BiDijkstra.h"
 #include "Algorithms/Dijkstra/Dijkstra.h"

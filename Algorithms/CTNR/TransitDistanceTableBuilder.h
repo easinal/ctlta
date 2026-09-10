@@ -24,53 +24,91 @@ public:
 
     void buildDistanceTable(CTNRData &data) const {
         const int numTransit = hierarchy.numTransitNodes();
-        data.resetDistanceTable();
         if (numTransit == 0)
             return;
+        constexpr int K = 16;
+        const auto &transitIdToVertexId = hierarchy.getTransitNodes();
+        const auto &vertexIdToTransitId = hierarchy.getTransitNodeIndexOfRankVector();
 
-        #pragma omp parallel for schedule(dynamic)
+        const int numChunks = (numTransit + K - 1) / K;
+
+        // Transit-subgraph CSR with heads already as transit indices and weights inlined,
+        // so the down sweep never resolves a vertex id again.
+        std::vector<int64_t> tFirst(numTransit + 1, 0);
         for (int i = 0; i < numTransit; ++i) {
-            runTransitSSSP(i, data);
+            const int u = transitIdToVertexId[i];
+            tFirst[i + 1] = tFirst[i] + (cchGraph.lastEdge(u) - cchGraph.firstEdge(u));
+        }
+        std::vector<int32_t> tHead(tFirst[numTransit]);
+        std::vector<int32_t> tUpW(tFirst[numTransit]);
+        std::vector<int32_t> tDownW(tFirst[numTransit]);
+#pragma omp parallel for schedule(static)
+        for (int i = 0; i < numTransit; ++i) {
+            const int u = transitIdToVertexId[i];
+            int64_t k = tFirst[i];
+            FORALL_INCIDENT_EDGES(cchGraph, u, e) {
+                tHead[k] = vertexIdToTransitId[cchGraph.edgeHead(e)];
+                tUpW[k] = upWeights[e];
+                tDownW[k] = downWeights[e];
+                ++k;
+            }
+        }
+#pragma omp parallel
+        {
+            std::vector<int32_t> buf(static_cast<size_t>(numTransit) * K);
+            std::vector<int32_t *> rows(K);
+#pragma omp for schedule(dynamic, 1)
+            for (int chunk = 0; chunk < numChunks; ++chunk) {
+                const int s0 = chunk * K;
+                const int kn = std::min(K, numTransit - s0);
+                std::fill(buf.begin(), buf.end(), CTNR_INFTY);
+
+                // Up phase: one elimination-path sweep per source (scalar, cheap).
+                for (int k = 0; k < kn; ++k) {
+                    buf[static_cast<size_t>(s0 + k) * K + k] = 0;
+                    for (int u = transitIdToVertexId[s0 + k]; u != INVALID_VERTEX;
+                         u = eliminationTree[u]) {
+                        const int i = vertexIdToTransitId[u];
+                        const int32_t d = buf[static_cast<size_t>(i) * K + k];
+                        if (d >= CTNR_INFTY)
+                            continue;
+                        for (int64_t e = tFirst[i]; e < tFirst[i + 1]; ++e) {
+                            const int32_t nd = d + tUpW[e];
+                            auto &slot = buf[static_cast<size_t>(tHead[e]) * K + k];
+                            if (nd < slot)
+                                slot = nd;
+                        }
+                    }
+                }
+
+                // Down phase: one shared sweep, K sources wide.
+                for (int i = numTransit - 1; i >= 0; --i) {
+                    int32_t *const __restrict dst = buf.data() + static_cast<size_t>(i) * K;
+                    for (int64_t e = tFirst[i]; e < tFirst[i + 1]; ++e) {
+                        const int32_t w = tDownW[e];
+                        const int32_t *const __restrict srcRow =
+                                buf.data() + static_cast<size_t>(tHead[e]) * K;
+                        for (int k = 0; k < K; ++k) {
+                            const int32_t nd = srcRow[k] + w;
+                            if (nd < dst[k])
+                                dst[k] = nd;
+                        }
+                    }
+                }
+
+                // Scatter the transposed batch into the table rows (K sequential streams).
+                for (int k = 0; k < kn; ++k)
+                    rows[k] = data.getDistanceTableRow(s0 + k);
+                for (int j = 0; j < numTransit; ++j) {
+                    const int32_t *const v = buf.data() + static_cast<size_t>(j) * K;
+                    for (int k = 0; k < kn; ++k)
+                        rows[k][j] = v[k];
+                }
+            }
         }
     }
 
 private:
-    void runTransitSSSP(const int sourceTransitIndex,
-                        CTNRData &data ) const {
-        const auto &transitIdToVertexId = hierarchy.getTransitNodes();
-        const auto &vertexIdToTransitId = hierarchy.getTransitNodeIndexOfRankVector();
-        const int sourceVertexId = transitIdToVertexId[sourceTransitIndex];
-        int* distanceTableRow = data.getDistanceTableRow(sourceTransitIndex);
-        distanceTableRow[sourceTransitIndex] = 0;
-        int u = sourceVertexId;
-        while (u != INVALID_VERTEX) {
-            const int32_t d = distanceTableRow[vertexIdToTransitId[u]];
-            FORALL_INCIDENT_EDGES(cchGraph, u, e) {
-                const int v = cchGraph.edgeHead(e);
-                const int neighborTransitIndex = vertexIdToTransitId[v];
-                const int32_t w = upWeights[e];
-                const int32_t nd = d + w;
-                if (nd < distanceTableRow[neighborTransitIndex]) {
-                    distanceTableRow[neighborTransitIndex] = nd;
-                }
-            }
-            u = eliminationTree[u];
-        }
-
-        for (int i = hierarchy.numTransitNodes() - 1; i >= 0; --i) {
-            const int u = transitIdToVertexId[i];
-            FORALL_INCIDENT_EDGES(cchGraph, u, e) {
-                const int neighborTransitIndex = vertexIdToTransitId[cchGraph.edgeHead(e)];
-                const int32_t w = downWeights[e];
-                const int32_t vd = distanceTableRow[neighborTransitIndex];
-                const int32_t nd = vd + w;
-                if (nd < distanceTableRow[i]) {
-                    distanceTableRow[i] = nd;
-                }
-            }
-        }
-    }
-
     const TransitNodeHierarchy &hierarchy;
     const CCH::UpGraph &cchGraph;
     const std::vector<int32_t> &eliminationTree;

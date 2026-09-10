@@ -1,0 +1,8 @@
+date:     2026-09-10 12:04:55
+host:     gazelle.cs.ucr.edu
+threads:  224
+numa:     numactl --interleave=all
+binary:   /home/zwan018/ctlta/Build/Release/Launchers/RunP2PAlgo  md5 a2dac2bbb8bc
+graphs:   NY FLA CAL E W USA
+schemes:  all
+loadavg at start: 0.18 0.61 2.56

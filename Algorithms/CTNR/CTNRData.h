@@ -29,12 +29,13 @@ public:
     explicit CTNRData(const int numTransitNodes, const int numVertices) :
             distanceTableRowSize(numTransitNodes),
             numVertices(numVertices),
-            distanceTable(distanceTableRowSize * distanceTableRowSize, CTNR_INFTY) {}
+            // size_t: N*N overflows int past N = 46340.
+            distanceTable(static_cast<size_t>(numTransitNodes) * numTransitNodes, CTNR_INFTY) {}
 
     // Input: Internal transit node index of access nodes.
     DEBUG_NOINLINE
     int getDistanceBetweenTransitNodes(ctnr::TransitNodeId indexS, ctnr::TransitNodeId indexT) const {
-        return distanceTable[indexS * distanceTableRowSize + indexT];
+        return distanceTable[static_cast<size_t>(indexS) * distanceTableRowSize + indexT];
     }
 
     ConstantVectorRange<ctnr::TransitNodeId> getAccessNodes(const int v) const {
@@ -94,7 +95,7 @@ public:
     }
 
     int32_t const * getDistanceTableRow(ctnr::TransitNodeId indexS) const {
-        return &distanceTable[indexS * distanceTableRowSize];
+        return &distanceTable[static_cast<size_t>(indexS) * distanceTableRowSize];
     }
 
 
@@ -107,16 +108,16 @@ private:
     }
 
     void resetDistanceTable() {
-        distanceTable.assign(distanceTableRowSize * distanceTableRowSize, CTNR_INFTY);
+        distanceTable.assign(static_cast<size_t>(distanceTableRowSize) * distanceTableRowSize, CTNR_INFTY);
     }
 
     int32_t *getDistanceTableRow(ctnr::TransitNodeId indexS) {
-        return &distanceTable[indexS * distanceTableRowSize];
+        return &distanceTable[static_cast<size_t>(indexS) * distanceTableRowSize];
     }
 
     // Input: Internal transit node index of access nodes.
     void setDistanceBetweenTransitNodes(ctnr::TransitNodeId indexS, ctnr::TransitNodeId indexT, int32_t distance) {
-        distanceTable[indexS * distanceTableRowSize + indexT] = distance;
+        distanceTable[static_cast<size_t>(indexS) * distanceTableRowSize + indexT] = distance;
     }
 
     template<typename>

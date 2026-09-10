@@ -281,6 +281,7 @@ public:
     void readFrom(std::ifstream &in) {
         decomp.readFrom(in);
         ranks.readFrom(in);
+        order.readFrom(in);
         bio::read(in, eliminationTree);
         upGraph.readFrom(in);
         downGraph.readFrom(in);
@@ -289,13 +290,18 @@ public:
         bio::read(in, upInputEdges);
         bio::read(in, downInputEdges);
 
-        reorderByLayers();
+        // Mirror preprocess(): the layered variant permutes after building, the plain one
+        // does not. Reordering unconditionally here would hand back a DIFFERENTLY NUMBERED
+        // CCH than the one that was written, for CCH = CCHBase<false>.
+        if constexpr (ORDER_BY_LEVEL)
+            reorderByLayers();
     }
 
     // Writes the CCH to the specified binary file.
     void writeTo(std::ofstream &out) const {
         decomp.writeTo(out);
         ranks.writeTo(out);
+        order.writeTo(out);
         bio::write(out, eliminationTree);
         upGraph.writeTo(out);
         downGraph.writeTo(out);

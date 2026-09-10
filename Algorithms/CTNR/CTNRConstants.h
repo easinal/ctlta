@@ -7,7 +7,8 @@
 static constexpr const int32_t CTNR_INFTY = std::numeric_limits<int>::max() / 3;
 
 namespace ctnr {
-    using TransitNodeId = uint16_t;
+    // int32, not uint16: USA holds 86178 transit nodes at thresh 14 (guard throws past the range).
+    using TransitNodeId = int32_t;
     using Level = int8_t;
 }
 

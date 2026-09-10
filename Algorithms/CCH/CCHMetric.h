@@ -105,6 +105,9 @@ class BaseCCHMetric {
     template<typename>
     friend class CTNRMetric;
 
+    template<typename>
+    friend class FHLMetric; // partial customization mutates the weights
+
   // Computes a respecting metric.
   void computeRespectingMetric() {
     upWeights.resize(cch.getUpwardGraph().numEdges());

@@ -1,19 +1,35 @@
 #pragma once
 
-// Computes metric-independent preprocessing for CTNR.
-class CTNRPreprocessor {
+#include <parallel/algorithm>
+
+#include <limits>
+#include <stdexcept>
+
+// FHL's metric-independent access-node pass: for every vertex, which hubs its
+// shortest paths can first reach, and where their distances live. FHL consumes this
+// only as SCAFFOLDING -- the seed fold turns it into per-region seeds during
+// customization and then releases it (see the [cust] releases phase).
+// Forked from CTNR's copy on purpose: the classic table keeps these arrays alive as
+// its query structure, FHL throws them away, so the two are free to diverge.
+#include "Algorithms/FHL/core/HubHierarchy.h"
+#include "Algorithms/FHL/core/HubAccessData.h"
+#include "Algorithms/FHL/core/FHLConstants.h"
+#include "Tools/Timer.h"
+
+// Computes FHL's metric-independent preprocessing.
+class HubAccessPreprocessor {
 
 public:
 
-    CTNRPreprocessor() = default;
+    HubAccessPreprocessor() = default;
 
-    const std::vector<AccessNodeEdge>& getAccessNodeEdges() const {
-        return accessNodeEdges;
+    const std::vector<HubAccessEdge>& getAccessHubEdges() const {
+        return accessHubEdges;
     }
 
     // Determines access nodes of each vertex and allocates distance entries.
     template<typename CchT>
-    void preprocess(const TransitNodeHierarchy &hierarchy, const CchT& cch, CTNRData &data) {
+    void preprocess(const HubHierarchy &hierarchy, const CchT& cch, HubAccessData &data) {
 
         int numVertices = cch.getUpwardGraph().numVertices();
         std::vector<int32_t> elimTreeFirstChild;
@@ -26,52 +42,62 @@ public:
         };
 
         // Debug output:
-        std::vector<int32_t> numTransitNodesToRoot(cch.getUpwardGraph().numVertices());
-        countTransitNodesToRoot(numTransitNodesToRoot, rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
-        std::cout << "CTNR: Average number of transit nodes to root: "
-                  << static_cast<double>(std::accumulate(numTransitNodesToRoot.begin(), numTransitNodesToRoot.end(), 0))
+        std::vector<int32_t> numHubsToRoot(cch.getUpwardGraph().numVertices());
+        countHubsToRoot(numHubsToRoot, rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
+        std::cout << "FHL: average hubs to root: "
+                  << static_cast<double>(std::accumulate(numHubsToRoot.begin(), numHubsToRoot.end(), 0))
                      / numVertices << std::endl;
 
         // Count number of access nodes per vertex
         data.pos.resize(numVertices + 1);
         countMetricIndependentAccessNodes(data.pos, cch.getUpwardGraph(), rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
 
-        if constexpr (CTNRData::USE_SIMD) {
+        if constexpr (HubAccessData::USE_SIMD) {
             // Pad counts to multiple of SIMD width
             for (int32_t &count: data.pos) {
-                count = roundUpToMultiple(count, CTNRData::K);
+                count = roundUpToMultiple(count, HubAccessData::K);
             }
         }
 
         // Prefix sum to get offsets. We can then be sure that the range for a vertex is able to
         // accommodate all access nodes of vertex v.
-        int32_t sum = 0;
+        // pos is int32-indexed by design, so the total entry count must fit. It does in
+        // every size-cut configuration (20 access hubs per vertex on USA); a too-shallow
+        // level cut instead leaves hundreds of hubs reachable from every vertex and blows
+        // past the limit, which used to surface as an opaque resize failure.
+        int64_t sum = 0;
         for (int32_t i = 0; i < numVertices; ++i) {
             const int32_t size = data.pos[i];
-            data.pos[i] = sum;
+            data.pos[i] = static_cast<int32_t>(sum);
             sum += size;
+            if (sum > std::numeric_limits<int32_t>::max())
+                throw std::overflow_error(
+                        "FHL: too many access hubs to index with 32 bits -- cut deeper "
+                        "(-fhl-region-size) or raise the hub level threshold");
         }
-        data.pos[numVertices] = sum;
+        data.pos[numVertices] = static_cast<int32_t>(sum);
 
         // Allocate space for access nodes and distances
-        data.accessNodes.resize(sum);
+        data.accessHubs.resize(sum);
         data.forwardDistances.resize(sum);
         data.backwardDistances.resize(sum);
 
-        writeMetricIndependentAccessNodes(data.pos, data.accessNodes, cch.getUpwardGraph(), rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
+        writeMetricIndependentAccessNodes(data.pos, data.accessHubs, cch.getUpwardGraph(), rankToIdx, hierarchy, elimTreeFirstChild, elimTreeChildren);
 
-        std::sort(accessNodeEdges.begin(), accessNodeEdges.end(), [](const AccessNodeEdge &a, const AccessNodeEdge &b) {
+        // Tens of millions of entries at continental scale: the largest single sort in the
+        // module, and parallelising it is nearly free. Preprocessing only -- metric-
+        // independent, so it never shows up in the customization numbers.
+        __gnu_parallel::sort(accessHubEdges.begin(), accessHubEdges.end(), [](const HubAccessEdge &a, const HubAccessEdge &b) {
             return a.edge < b.edge;
         });
 
-        // TODO: remove debug
-        std::cout << "CTNR: Average access nodes per vertex: "
-                  << static_cast<double>(data.accessNodes.size()) / numVertices << std::endl;
+        std::cout << "FHL: average access hubs per vertex: "
+                  << static_cast<double>(data.accessHubs.size()) / numVertices << std::endl;
     }
 
     uint64_t sizeInBytes() const {
-        uint64_t size = sizeof(CTNRPreprocessor);
-        size += accessNodeEdges.size() * sizeof(decltype(accessNodeEdges)::value_type);
+        uint64_t size = sizeof(HubAccessPreprocessor);
+        size += accessHubEdges.size() * sizeof(decltype(accessHubEdges)::value_type);
         return size;
     }
 
@@ -153,31 +179,31 @@ private:
     template<typename GraphT, typename RankToIdxT>
     void countMetricIndependentAccessNodes(std::vector<int32_t> &outCounts, const GraphT &upGraph,
     const RankToIdxT &rankToIdx,
-    const TransitNodeHierarchy &hierarchy,
+    const HubHierarchy &hierarchy,
     const std::vector<int32_t> &elimTreeFirstChild,
     const std::vector<int32_t> &elimTreeChildren) const {
 
         KASSERT(outCounts.size() == upGraph.numVertices() + 1);
 
         const int root = upGraph.numVertices() - 1;
-        if (hierarchy.isTransitNode(root)) {
+        if (hierarchy.isHub(root)) {
             outCounts[rankToIdx(root)] = 0;
         }
 
         std::stack<int, std::vector<int>> numAdded;
-        BitVector isActive(hierarchy.numTransitNodes());
+        BitVector isActive(hierarchy.numHubs());
         std::stack<int, std::vector<int>> active;
         const auto recurse = [&](const int /*parent*/, const int child) {
             numAdded.push(0);
-            if (hierarchy.isTransitNode(child)) {
+            if (hierarchy.isHub(child)) {
                 outCounts[rankToIdx(child)] = 0;
                 return;
             }
             FORALL_INCIDENT_EDGES(upGraph, child, e) {
                 const int neighbor = upGraph.edgeHead(e);
-                if (!hierarchy.isTransitNode(neighbor))
+                if (!hierarchy.isHub(neighbor))
                     continue;
-                const int node = hierarchy.getTransitNodeIndexOfRank(neighbor);
+                const int node = hierarchy.hubIdOfRank(neighbor);
                 if (isActive[node])
                     continue;
                 isActive[node] = true;
@@ -200,10 +226,10 @@ private:
     }
 
     template<typename GraphT, typename RankToIdxT>
-    void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos, std::vector<ctnr::TransitNodeId> &entries,
+    void writeMetricIndependentAccessNodes(const std::vector<int32_t> &pos, std::vector<fhl::HubId> &entries,
                                            const GraphT &upGraph,
                                            const RankToIdxT &rankToIdx,
-    const TransitNodeHierarchy &hierarchy,
+    const HubHierarchy &hierarchy,
                                 const std::vector<int32_t> &elimTreeFirstChild,
                                 const std::vector<int32_t> &elimTreeChildren) {
 
@@ -213,25 +239,25 @@ private:
         const auto recurse = [&](const int parent, const int child) {
             const int childIdx = rankToIdx(child);
             const int startChild = pos[childIdx];
-            if (hierarchy.isTransitNode(child)) {
+            if (hierarchy.isHub(child)) {
                 return;
             }
 
-            // Add all transit nodes from parent to child
+            // Add all hubs from parent to child
             const int parentIdx = rankToIdx(parent);
             KASSERT(curNumEntries[parentIdx] <= pos[parentIdx + 1] - pos[parentIdx] &&
-                    curNumEntries[parentIdx] >= pos[parentIdx + 1] - pos[parentIdx] - CTNRData::K);
+                    curNumEntries[parentIdx] >= pos[parentIdx + 1] - pos[parentIdx] - HubAccessData::K);
             for (int i = 0; i < curNumEntries[parentIdx]; ++i) {
                 entries[startChild + i] = entries[pos[parentIdx] + i];
             }
             curNumEntries[childIdx] = curNumEntries[parentIdx];
 
-            // If any upward neighbor is a transit node that has not been seen on this branch, add it to back of list
+            // If any upward neighbor is a hub that has not been seen on this branch, add it to back of list
             FORALL_INCIDENT_EDGES(upGraph, child, e) {
                 const int neighbor = upGraph.edgeHead(e);
-                if (!hierarchy.isTransitNode(neighbor))
+                if (!hierarchy.isHub(neighbor))
                     continue;
-                const ctnr::TransitNodeId node = hierarchy.getTransitNodeIndexOfRank(neighbor);
+                const fhl::HubId node = hierarchy.hubIdOfRank(neighbor);
                 int i = 0;
                 for (; i < curNumEntries[childIdx]; ++i) {
                     if (entries[startChild + i] == node) {
@@ -239,7 +265,7 @@ private:
                     }
                 }
                 // Mark access node edge:
-                accessNodeEdges.emplace_back(e, startChild + i);
+                accessHubEdges.emplace_back(e, startChild + i);
                 if (i < curNumEntries[childIdx])
                     continue; // Neighbor is already an access node
                 // New access node
@@ -247,41 +273,41 @@ private:
                 ++curNumEntries[childIdx];
             }
             KASSERT(curNumEntries[childIdx] <= pos[childIdx + 1] - startChild &&
-                    curNumEntries[childIdx] >= pos[childIdx + 1] - startChild - CTNRData::K);
+                    curNumEntries[childIdx] >= pos[childIdx + 1] - startChild - HubAccessData::K);
         };
 
         const auto backtrack = [&](const int /*child*/, const int /*parent*/) {
             // no op
         };
 
-        // TODO: parallelize
+        // Serial on purpose: one pass over the elimination tree, a negligible share here.
         dfsOnTree(elimTreeFirstChild, elimTreeChildren, recurse, backtrack);
     }
 
 
     template<typename RankToIdxT>
-    void countTransitNodesToRoot(std::vector<int32_t> &outCounts,
+    void countHubsToRoot(std::vector<int32_t> &outCounts,
                                 const RankToIdxT &rankToIdx,
-    const TransitNodeHierarchy &hierarchy,
+    const HubHierarchy &hierarchy,
                                 const std::vector<int32_t> &elimTreeFirstChild,
                                 const std::vector<int32_t> &elimTreeChildren) const {
 
         int curCount = 0;
         const int root = outCounts.size() - 1;
-        if (hierarchy.isTransitNode(root)) {
+        if (hierarchy.isHub(root)) {
             ++curCount;
         }
         outCounts[rankToIdx(root)] = curCount;
 
         const auto recurse = [&](const int /*parent*/, const int child) {
-            if (hierarchy.isTransitNode(child)) {
+            if (hierarchy.isHub(child)) {
                 ++curCount;
             }
             outCounts[rankToIdx(child)] = curCount;
         };
 
         const auto backtrack = [&](const int child, const int /*parent*/) {
-            if (hierarchy.isTransitNode(child)) {
+            if (hierarchy.isHub(child)) {
                 --curCount;
             }
         };
@@ -289,8 +315,8 @@ private:
         dfsOnTree(elimTreeFirstChild, elimTreeChildren, recurse, backtrack);
     }
 
-    // Information on edges leading from non-transit nodes directly to access nodes which is a special case during
+    // Information on edges leading from non-hubs directly to access nodes which is a special case during
     // customization.
-    std::vector<AccessNodeEdge> accessNodeEdges;
+    std::vector<HubAccessEdge> accessHubEdges;
 
 };

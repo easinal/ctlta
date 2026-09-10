@@ -73,7 +73,7 @@ public:
 
     const std::vector<int32_t> &getLocalEliminationTree() const { return localEliminationTree; }
 
-    const LayerCCHMetric &getCCHMetric() const { return cchMetric; }
+    const BaseCCHMetric<CchT> &getCCHMetric() const { return cchMetric; }
 
     // Memory usage calculation including node levels
     uint64_t sizeInBytes() const {

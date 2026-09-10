@@ -12,3 +12,7 @@
 /.project
 /.pydevproject
 /.idea/
+
+*.md
+*.log
+*.csv

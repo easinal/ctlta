@@ -4,6 +4,7 @@
 #include <stack>
 
 #include "Algorithms/CCH/CCH.h"
+#include "DataStructures/Partitioning/SeparatorDecompositionWalk.h"
 #include "DataStructures/Partitioning/SeparatorTree.h"
 #include "Algorithms/CCH/CCHMetric.h"
 
@@ -32,10 +33,10 @@ public:
     void preprocess(const InputGraphT &inputGraph, const int newTransitNodeThreshold,
                     const SeparatorDecomposition &sepDecomp, const PermuteVertexIdT& permuteVertexId = {}) {
 
-        const auto sdDepth = computeSepDecompDepth(sepDecomp);
+        const auto sdDepth = sepdecomp::depth(sepDecomp);
         std::cout << "Depth of sepDecomp is " << sdDepth << std::endl;
 
-        if (!hasStrictDissectionStructure(sepDecomp))
+        if (!sepdecomp::hasStrictDissectionStructure(sepDecomp))
             throw std::invalid_argument("TransitNodeHierarchy requires strict dissection "
                                         "structure of separator decomposition.");
 
@@ -135,62 +136,6 @@ public:
     }
 
 private:
-    // Returns true if every separator node in decomposition has at most two children, or false otherwise.
-    static bool hasStrictDissectionStructure(const SeparatorDecomposition &sd) {
-        for (const auto &n: sd.tree)
-            if (n.rightSibling != 0 && sd.tree[n.rightSibling].rightSibling != 0)
-                return false;
-        return true;
-    }
-
-
-    template<typename RecurseCallbackT,
-            typename BacktrackCallbackT>
-    static void forEachSepDecompNodeInDfsOrder(const SeparatorDecomposition &sd,
-                                               RecurseCallbackT recurse,
-                                               BacktrackCallbackT backtrack) {
-        std::stack<uint32_t> sdNodesStack;
-        sdNodesStack.push(0);
-        bool returnedFromChildren = false;
-        while (true) {
-            const auto node = sdNodesStack.top();
-
-            if (!returnedFromChildren && sd.leftChild(node) != 0) {
-                recurse(node, sd.leftChild(node));
-                sdNodesStack.push(sd.leftChild(node));
-                continue;
-            }
-
-            // Done with this node. If there are siblings continue with siblings, otherwise return to parent.
-            sdNodesStack.pop();
-            if (sdNodesStack.empty())
-                break; // Finished when stack becomes empty
-
-            backtrack(node, sdNodesStack.top());
-            if (sd.rightSibling(node) != 0) {
-                recurse(sdNodesStack.top(), sd.rightSibling(node));
-                sdNodesStack.push(sd.rightSibling(node));
-                returnedFromChildren = false;
-            } else {
-                returnedFromChildren = true;
-            }
-        }
-    }
-
-    static size_t computeSepDecompDepth(const SeparatorDecomposition &sd) {
-        Level maxDepth = 0;
-        Level curDepth = 1;
-        forEachSepDecompNodeInDfsOrder(sd,
-                                       [&](const int, const int) {
-                                           ++curDepth;
-                                           maxDepth = std::max(maxDepth, curDepth);
-                                       },
-                                       [&](const int, const int) {
-                                           --curDepth;
-                                       });
-        return maxDepth;
-    }
-
     // Finds depth, side bitvector, and truncation flag of each vertex.
     template<typename PermuteVertexIdT>
     void computeVertexLocationInSepDecomp(const SeparatorDecomposition &sd, const PermuteVertexIdT& permuteVertexId) {
@@ -245,12 +190,16 @@ private:
             setBit(packedSideId, depth - 1, false);
         };
 
-        forEachSepDecompNodeInDfsOrder(sd, recurse, backtrack);
+        sepdecomp::forEachNodeInDfsOrder(sd, recurse, backtrack);
 
         // Re-order transit nodes by decreasing level and increasing rank, and build mapping from CCH rank to index within transit nodes
         auto compareByLevelAndRank = [&](int32_t a, int32_t b) {
             return vertexLevel[a] > vertexLevel[b] || (vertexLevel[a] == vertexLevel[b] && a < b);
         };
+        if (transitNodes.size() > std::numeric_limits<TransitNodeId>::max())
+            throw std::invalid_argument(
+                    "Number of transit nodes (" + std::to_string(transitNodes.size()) +
+                    ") exceeds TransitNodeId range; lower the transit node level threshold.");
         std::sort(transitNodes.begin(), transitNodes.end(), compareByLevelAndRank);
         for (int i = 0; i < transitNodes.size(); ++i) {
             transitNodeIndexOfRank[transitNodes[i]] = i;

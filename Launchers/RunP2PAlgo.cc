@@ -1,8 +1,12 @@
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <sstream>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -14,6 +18,11 @@
 #include "Algorithms/CTNR/CTNRMetric.h"
 #include "Algorithms/CTNR/CTNRQuery.h"
 #include "Algorithms/CTNR/CTNRPreprocessor.h"
+#include "Algorithms/FHL/core/HubHierarchy.h"
+#include "Algorithms/FHL/core/HubAccessPreprocessor.h"
+#include "Algorithms/FHL/FHLData.h"
+#include "Algorithms/FHL/FHLMetric.h"
+#include "Algorithms/FHL/FHLQuery.h"
 #include "Algorithms/CTL/BalancedTopologyCentricTreeHierarchy.h"
 #include "Algorithms/CTL/TruncatedTreeLabelling.h"
 #include "Algorithms/CTL/CTLMetric.h"
@@ -21,6 +30,7 @@
 #include "Algorithms/CCH/CCH.h"
 #include "Algorithms/CCH/CCHMetric.h"
 #include "Algorithms/CCH/EliminationTreeQuery.h"
+#include "DataStructures/Partitioning/SeparatorDecompositionWalk.h"
 #include "Algorithms/CH/CH.h"
 #include "Algorithms/CH/CHQuery.h"
 #include "Algorithms/Dijkstra/BiDijkstra.h"
@@ -46,6 +56,7 @@ inline void printUsage() {
               "       RunP2PAlgo -a CCH        -o <file> -g <file> [-b <balance>]\n"
               "       RunP2PAlgo -a CTL        -o <file> -g <file> [-b <balance>]\n"
               "       RunP2PAlgo -a CTNR       -o <file> -g <file> [-b <balance>]\n\n"
+              "       RunP2PAlgo -a FHL        -o <file> -g <file> [-b <balance>]\n\n"
 
               "       RunP2PAlgo -a CCH-custom -o <file> -g <file> -s <file> [-n <num>]\n"
               "       RunP2PAlgo -a CTL-custom -o <file> -g <file> -s <file> [-n <num>]\n\n"
@@ -57,6 +68,7 @@ inline void printUsage() {
               "       RunP2PAlgo -a CCH-tree   -o <file> -g <file> -d <file> -s <file>\n"
               "       RunP2PAlgo -a CTL        -o <file> -g <file> -d <file> -s <file>\n"
               "       RunP2PAlgo -a CTNR       -o <file> -g <file> -d <file> -s <file>\n\n"
+              "       RunP2PAlgo -a FHL        -o <file> -g <file> -d <file> -s <file>\n\n"
 
               "Runs the preprocessing, customization or query phase of various point-to-point\n"
               "shortest-path algorithms, such as Dijkstra, bidirectional search, CH, CCH, CTL, and CTNR.\n\n"
@@ -65,14 +77,24 @@ inline void printUsage() {
               "  -no-stall         do not use the stall-on-demand technique\n"
               "  -a <algo>         run algorithm <algo>\n"
               "  -b <balance>      balance parameter in % for nested dissection (default: 30)\n"
-              "  -n <num>          run customization <num> times (default: 1000)\n"
+              "  -n <num>          run customization <num> times (default: 1000 in the *-custom modes; 1 in query runs, which report every run and the median)\n"
               "  -g <file>         input graph in binary format\n"
               "  -s <file>         separator decomposition of input graph\n"
               "  -h <file>         weighted contraction hierarchy\n"
               "  -d <file>         file that contains OD pairs (queries)\n"
               "  -o <file>         place output in <file>\n"
-              "  -ctnr-thresh <num>  transit node level threshold (default: 5)\n"
+              "  -ctnr-thresh <num|auto>  top decomposition levels that become transit nodes (CTNR, and FHL without -fhl-region-size); auto sizes the cut so T ~ 17.6 sqrt(n) (default: 5)\n"
               "  -ctnr-prune-thresh <num>  access node pruning level threshold. Set to 0 for no pruning, to 127 for full pruning or to a value > ctnr-thresh for partial pruning (default: 0)\n"
+              "  -fhl-region-size <num|auto>  leaf regions are maximal subtrees of <= num vertices; auto = n/16384, min 64\n"
+              "  -fhl-subtree-rebuild <0|1>  middle update gear: rebuild only the changed separator subtree instead of everything (keeps the span-1 tables resident)\n"
+              "  -cch-cache <file>         cache the metric-independent CCH here; first run writes it, later runs load it (USA: 18.5 s -> well under 1 s of start-up)\n"
+              "  -fhl-subregion-size <num>  SCHEME 2 (in-region hubs): cut each leaf region again at <num> vertices; same-region queries fold over the region's own hubs instead of searching\n"
+              "  -fhl-top-labels <num>  SCHEME 3 (top labels): materialize per-vertex fused values for columns with level < num; far queries become one contiguous min\n"
+              "  -fhl-overlay-every <num>  SCHEME 4 (overlay): region-restricted boundary-point cliques every <num> levels; slower queries, locally updatable\n"
+              "  -fhl-overlay-cuts <l1,l2,...>  custom overlay cut depths\n"
+              "  -overlay-bench-updates <num>  measure overlay partial re-customization over <num> regions\n"
+              "  -fhl-bench-updates <num>  measure the three update gears over <num> perturbation rounds\n"
+              "  -fhl-bench-updates-verify <num>  before timing, check <num> perturbed states against a from-scratch customization, array by array\n"
               "  -help             display this help and exit\n";
 }
 
@@ -116,6 +138,146 @@ inline void writeRecordLine(std::ofstream &out, CTNRQuery &algo, const int, cons
     out << algo.getDistance() << ',' << elapsed << ',' << algo.getLastMode() << '\n';
 }
 
+// T[L] = the transit nodes a cut at L levels selects: the separator vertices of every
+// decomposition node at depth < L (root = depth 0). T.back() is the whole graph.
+inline std::vector<int64_t> transitCountByLevels(const SeparatorDecomposition &sd) {
+    std::vector<int64_t> perDepth;
+    const auto add = [&](const int node, const size_t d) {
+        if (perDepth.size() <= d)
+            perDepth.resize(d + 1, 0);
+        perDepth[d] += sd.lastSeparatorVertex(node) - sd.firstSeparatorVertex(node);
+    };
+    size_t cur = 0;
+    add(0, 0);
+    sepdecomp::forEachNodeInDfsOrder(sd, [&](const int, const int child) { add(child, ++cur); },
+                                     [&](const int, const int) { --cur; });
+    std::vector<int64_t> T(perDepth.size() + 1, 0);
+    for (size_t d = 0; d < perDepth.size(); ++d)
+        T[d + 1] = T[d] + perDepth[d];
+    return T;
+}
+
+// Number of top decomposition levels whose vertices become transit nodes (-ctnr-thresh).
+// `auto` picks the level count whose transit count T is closest, as a ratio, to 17.6 sqrt(n).
+// That is classic TNR sizing: the table is T x T, so T ~ sqrt(n) keeps it proportional to n,
+// the same cost per vertex on every graph. A fixed level count cuts relatively deeper into a
+// small graph (at 14 levels T/sqrt(n) is 26 on FLA but 17.6 on USA); a fixed fraction of the
+// depth over-corrects the other way, because the depth is only ~log n and 2^(a*depth) ~ n^a
+// regions grows polynomially with the graph. 17.6 is USA's value at 14 levels, so USA keeps
+// the setting the doc's tables were measured with.
+inline int transitLevels(const CommandLineParser &clp, const SeparatorDecomposition &sd) {
+    const auto arg = clp.getValue<std::string>("ctnr-thresh", "5");
+    if (arg != "auto")
+        return std::stoi(arg);
+    const auto T = transitCountByLevels(sd);
+    const double target = 17.6 * std::sqrt(static_cast<double>(T.back()));
+    const auto miss = [&](const int L) {  // how far off target, as a ratio; empty cuts never win
+        return T[L] > 0 ? std::abs(std::log(T[L] / target)) : HUGE_VAL;
+    };
+    int best = 1;
+    for (int L = 2; L < static_cast<int>(T.size()); ++L)
+        if (miss(L) < miss(best))
+            best = L;
+    std::cout << "Transit levels (auto): " << best << " of " << T.size() - 1 << ", T = "
+              << T[best] << ", target 17.6 sqrt(n) = " << static_cast<int64_t>(target)
+              << "\n  T by level count:";
+    for (size_t L = 1; L < T.size(); ++L)
+        std::cout << ' ' << L << ':' << T[L];
+    std::cout << std::endl;
+    return best;
+}
+
+// The CCH is metric-independent, so for a fixed (graph, separator decomposition) it only has
+// to be built once. Building it dominates start-up on the large graphs (USA: 18.5 s of a 20 s
+// start-up), which makes parameter sweeps painful. With -cch-cache <file> the first run writes
+// the file and later runs load it. The file is NOT self-describing: pointing two different
+// graphs at one cache path silently produces nonsense, so name the files after the graph.
+// Where each run's time went, written to the csv header so preprocessing and customization
+// are reported separately. Uniform rule for every scheme: "scheme preprocessing" is everything
+// from a ready CCH up to the customization call; "customization" is that call. The CCH line
+// says whether the CCH was built (a real preprocessing time) or merely loaded from the cache.
+struct PhaseTimes {
+    double cchMs = 0;
+    bool cchLoaded = false;
+    double schemeMs = 0;
+    double customizationMs = 0;              // median of the runs below
+    std::vector<double> customizationRuns;   // every run, in order (-n, as in the *-custom modes)
+};
+
+inline void writePhaseTimes(std::ofstream &out, const PhaseTimes &t) {
+    out << "# Preprocessing CCH: " << t.cchMs << " ms ("
+        << (t.cchLoaded ? "loaded from cache" : "built") << ")\n";
+    out << "# Preprocessing scheme: " << t.schemeMs << " ms\n";
+    out << "# Customization: " << t.customizationMs << " ms (median of "
+        << t.customizationRuns.size() << ")\n";
+    out << "# Customization runs (ms):";
+    for (const double ms: t.customizationRuns)
+        out << ' ' << ms;
+    out << '\n';
+}
+
+inline double msSince(const Timer &t) { return t.elapsed<std::chrono::microseconds>() / 1000.0; }
+
+// -n N: customize N times and report every run plus the median -- the same repetition format
+// the *-custom modes (e.g. CTL-custom) use, so every scheme's customization is measured the same
+// way; a single run varies by ~5%. The caller times the first run (firstMs) and `again` repeats
+// exactly that call. The queries then run on the last customization, so the correctness check
+// covers the repeats.
+template<typename F>
+void recordCustomization(const CommandLineParser &clp, PhaseTimes &times, const double firstMs,
+                         F &&again) {
+    const int n = std::max(1, clp.getValue<int>("n", 1));
+    times.customizationRuns = {firstMs};
+    for (int i = 1; i < n; ++i) {
+        Timer t;
+        again();
+        times.customizationRuns.push_back(msSince(t));
+    }
+    std::vector<double> sorted = times.customizationRuns;
+    std::sort(sorted.begin(), sorted.end());
+    times.customizationMs = sorted[n / 2];
+}
+
+template<typename CchT, typename InputGraphT>
+void buildOrLoadCch(const CommandLineParser &clp, const InputGraphT &graph,
+                    const SeparatorDecomposition &sepDecomp, CchT &cch, PhaseTimes &times) {
+    const auto cache = clp.getValue<std::string>("cch-cache", "");
+    if (!cache.empty()) {
+        if (std::ifstream in(cache, std::ios::binary); in.good()) {
+            Timer t;
+            cch.readFrom(in);
+            times.cchMs = msSince(t);
+            times.cchLoaded = true;
+            std::cout << "Loaded CCH from " << cache << " in "
+                      << t.elapsed<std::chrono::milliseconds>() << " ms." << std::endl;
+            return;
+        }
+    }
+    Timer t;
+    cch.preprocess(graph, sepDecomp);
+    times.cchMs = msSince(t);
+    std::cout << "Built CCH in " << t.elapsed<std::chrono::milliseconds>() << " ms." << std::endl;
+    if (!cache.empty()) {
+        // Write to a temporary name and rename only once every byte is on disk. A plain
+        // ofstream does not throw when the disk fills up: it would leave a TRUNCATED cache
+        // under the real name, and every later run would load garbage from it.
+        const auto tmp = cache + ".partial";
+        {
+            std::ofstream out(tmp, std::ios::binary);
+            cch.writeTo(out);
+            out.close();
+            if (!out) {
+                std::remove(tmp.c_str());
+                throw std::runtime_error("failed writing the CCH cache (disk full?) -- '" +
+                                         cache + "'");
+            }
+        }
+        if (std::rename(tmp.c_str(), cache.c_str()) != 0)
+            throw std::runtime_error("cannot rename '" + tmp + "' to '" + cache + "'");
+        std::cout << "Wrote CCH to " << cache << "." << std::endl;
+    }
+}
+
 // Runs the specified P2P algorithm on the given OD pairs.
 template<typename AlgoT, typename T>
 inline void runQueries(AlgoT &algo, const std::string &demand, std::ofstream &out, T translate) {
@@ -141,6 +303,21 @@ inline void runQueries(AlgoT &algo, const std::string &demand, std::ofstream &ou
         if (hasRanks) out << rank << ',';
         writeRecordLine(out, algo, dst, elapsed);
         ++count;
+    }
+    if constexpr (requires { algo.getLocalPairs(); })
+        std::cout << "Local (same-region) pairs: " << algo.getLocalPairs() << " of " << count
+                  << ", answered by the in-region fold: " << algo.getLocalFolds()
+                  << std::endl;
+    if constexpr (requires { algo.getLabelOnlyPairs(); })
+        std::cout << "Label-only slices (whole scan inside the label prefix): "
+                  << algo.getLabelOnlyPairs() << " of " << count << std::endl;
+    if constexpr (requires { algo.getEarlyStops(); }) {
+        std::cout << "Overlay ladder cutoffs: " << algo.getEarlyStops() << " of " << count
+                  << " queries; by level (mi at break):";
+        for (size_t i = 0; i < algo.getStopLevels().size(); ++i)
+            if (algo.getStopLevels()[i] > 0)
+                std::cout << ' ' << i << ':' << algo.getStopLevels()[i];
+        std::cout << std::endl;
     }
 }
 
@@ -236,13 +413,19 @@ inline void runQueries(const CommandLineParser &clp) {
         sepFile.close();
 
         CCH cch;
-        cch.preprocess(graph, sepDecomp);
+        PhaseTimes times;
+        buildOrLoadCch(clp, graph, sepDecomp, cch, times);
+        Timer phase;
         CCHMetric metric(cch, useLengths ? &graph.length(0) : &graph.travelTime(0));
+        times.schemeMs = msSince(phase);
+        phase.restart();
         const auto minCH = metric.buildMinimumWeightedCH();
+        recordCustomization(clp, times, msSince(phase), [&] { metric.buildMinimumWeightedCH(); });
 
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# Separator: " << sepFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
+        writePhaseTimes(outputFile, times);
 
         if (noStalling) {
             CCHDij<false> algo(minCH);
@@ -269,13 +452,19 @@ inline void runQueries(const CommandLineParser &clp) {
         sepFile.close();
 
         CCH cch;
-        cch.preprocess(graph, sepDecomp);
+        PhaseTimes times;
+        buildOrLoadCch(clp, graph, sepDecomp, cch, times);
+        Timer phase;
         CCHMetric metric(cch, useLengths ? &graph.length(0) : &graph.travelTime(0));
+        times.schemeMs = msSince(phase);
+        phase.restart();
         const auto minCH = metric.buildMinimumWeightedCH();
+        recordCustomization(clp, times, msSince(phase), [&] { metric.buildMinimumWeightedCH(); });
 
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# Separator: " << sepFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
+        writePhaseTimes(outputFile, times);
 
         CCHTree algo(minCH, cch.getEliminationTree());
         outputFile << "# Memory usage CCH: " << (cch.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
@@ -303,7 +492,9 @@ inline void runQueries(const CommandLineParser &clp) {
         sepFile.close();
 
         CCH cch;
-        cch.preprocess(graph, sepDecomp);
+        PhaseTimes times;
+        buildOrLoadCch(clp, graph, sepDecomp, cch, times);
+        Timer phase;
 
         BalancedTopologyCentricTreeHierarchy treeHierarchy;
         treeHierarchy.preprocess(graph, sepDecomp);
@@ -318,11 +509,15 @@ inline void runQueries(const CommandLineParser &clp) {
         CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION> metric(treeHierarchy, cch,
                                                                                  useLengths ? &graph.length(0)
                                                                                             : &graph.travelTime(0));
+        times.schemeMs = msSince(phase);
+        phase.restart();
         metric.buildCustomizedCTL(ctl);
+        recordCustomization(clp, times, msSince(phase), [&] { metric.buildCustomizedCTL(ctl); });
 
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# Separator: " << sepFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
+        writePhaseTimes(outputFile, times);
 
         CTLQuery<CTLMetric<LabellingT, CTLLabelSet, CTL_USE_PERFECT_CUSTOMIZATION>::SearchGraph, LabellingT, CTLLabelSet> algo(
                 treeHierarchy, metric.upwardGraph(),
@@ -355,31 +550,35 @@ inline void runQueries(const CommandLineParser &clp) {
         sepDecomp.readFrom(sepFile);
         sepFile.close();
 
-        // Build CCH and tree hierarchy
-        LayerCCH cch;
-        cch.preprocess(graph, sepDecomp);
-//        std::cout << "Finished CCH preprocessing" << std::endl;
+        // Build CCH and tree hierarchy (non-layered: the layered variant serializes the
+        // top layers of the triangle pass; SD index == rank here, so no vertex mapping)
+        CCH cch;
+        PhaseTimes times;
+        buildOrLoadCch(clp, graph, sepDecomp, cch, times);
+        Timer phase;
 
-        const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
+        const int levelThreshold = transitLevels(clp, sepDecomp);
         int pruneThreshold = clp.getValue<int>("ctnr-prune-thresh", 0);
 
         TransitNodeHierarchy hierarchy;
-        hierarchy.preprocess(graph, levelThreshold, sepDecomp, cch.getSepDecompToCCHGraphVertexMapping()); // first levelThreshold levels are transit nodes
-//        std::cout << "Finished TransitNodeHierarchy preprocessing" << std::endl;
+        hierarchy.preprocess(graph, levelThreshold, sepDecomp); // first levelThreshold levels are transit nodes
         // Build CTNR
         CTNRData data(hierarchy.numTransitNodes(), graph.numVertices());
         CTNRPreprocessor preprocessor;
-        CTNRMetric<LayerCCH> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
+        CTNRMetric<CCH> metric(hierarchy, cch, preprocessor.getAccessNodeEdges(),
                                        useLengths ? &graph.length(0) : &graph.travelTime(0), pruneThreshold);
 
         // Preprocess CTNR
         preprocessor.preprocess(hierarchy, cch, data);
+        times.schemeMs = msSince(phase);
         std::cout << "Finished preprocessing" << std::endl;
         // Customize CTNR
+        phase.restart();
         metric.customize(data);
-//        std::cout << "Finished CTNRMetric customization" << std::endl;
+        recordCustomization(clp, times, msSince(phase), [&] { metric.customize(data); });
         outputFile << "# Graph: " << graphFileName << '\n';
         outputFile << "# OD pairs: " << demandFileName << '\n';
+        writePhaseTimes(outputFile, times);
         // outputFile << "# Memory usage total: " << ctnr.sizeInBytes() / BYTES_PER_MB << " MB" << '\n';
 
         // Use generic runQueries with CTNRQuery; pass CCH rank IDs to the algo
@@ -398,6 +597,343 @@ inline void runQueries(const CommandLineParser &clp) {
                    (cch.sizeInBytes() + hierarchy.sizeInBytes() + data.sizeInBytes() + preprocessor.sizeInBytes() +
                     metric.sizeInBytes() +
                     algo.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        runQueries(algo, demandFileName, outputFile, [&](const int v) { return cch.getRanks()[v]; });
+
+    } else if (algorithmName == "FHL") {
+
+        // Run FHL queries (seed/rectangle family, or the overlay variant)
+        std::ifstream graphFile(graphFileName, std::ios::binary);
+        if (!graphFile.good())
+            throw std::invalid_argument("file not found -- '" + graphFileName + "'");
+        InputGraph graph(graphFile);
+        graphFile.close();
+
+        std::ifstream sepFile(sepFileName, std::ios::binary);
+        if (!sepFile.good())
+            throw std::invalid_argument("file not found -- '" + sepFileName + "'");
+        SeparatorDecomposition sepDecomp;
+        sepDecomp.readFrom(sepFile);
+        sepFile.close();
+
+        CCH cch; // non-layered: the layered variant serializes the expensive top layers
+                 // of the triangle pass (measured 10x slower customization)
+        PhaseTimes times;
+        buildOrLoadCch(clp, graph, sepDecomp, cch, times);
+        Timer phase;
+
+        const int levelThreshold = transitLevels(clp, sepDecomp);
+        const int pruneThreshold = clp.getValue<int>("ctnr-prune-thresh", 0);
+        const auto fhlRegionSizeStr = clp.getValue<std::string>("fhl-region-size", "0");
+        // auto: ~n/16384 regions keeps the transit count at its ~45*sqrt(n) balance point
+        const int32_t fhlRegionSize = fhlRegionSizeStr == "auto"
+                ? std::max(64, graph.numVertices() / 16384)
+                : std::stoi(fhlRegionSizeStr);
+        const int32_t fhlTopLabels = clp.getValue<int>("fhl-top-labels", 0);
+        const int32_t fhlBenchUpdates = clp.getValue<int>("fhl-bench-updates", 0);
+        const bool fhlSubtreeRebuild = clp.getValue<int>("fhl-subtree-rebuild", 0) != 0;
+        const int32_t fhlSubregionSize = clp.getValue<int>("fhl-subregion-size", 0);
+        const int32_t fhlOverlayEvery = clp.getValue<int>("fhl-overlay-every", 0);
+        const int32_t overlayBenchUpdates = clp.getValue<int>("overlay-bench-updates", 0);
+        // 1 = seed/rectangle family (default), 2 = overlay
+        const int32_t scheme = fhlOverlayEvery > 0 ? 2 : 1;
+        std::vector<int32_t> fhlOverlayCuts;
+        {
+            const auto cutsStr = clp.getValue<std::string>("fhl-overlay-cuts", "");
+            std::stringstream ss(cutsStr);
+            std::string tok;
+            while (std::getline(ss, tok, ','))
+                if (!tok.empty())
+                    fhlOverlayCuts.push_back(std::stoi(tok));
+        }
+
+        HubHierarchy hierarchy;
+        if (fhlRegionSize > 0) {
+            if (scheme != 1)
+                throw std::invalid_argument("-fhl-region-size cannot be combined with "
+                                            "-fhl-overlay");
+            hierarchy.preprocessSizeCut(graph, fhlRegionSize, fhlSubregionSize, sepDecomp);
+        } else {
+            hierarchy.preprocess(graph, levelThreshold, sepDecomp); // SD index == rank for the non-layered CCH
+        }
+
+        fhl::Regions regions;
+        {
+            Timer regionTimer;
+            regions.build(hierarchy, graph, cch.getRanks(), scheme == 2, fhlOverlayEvery,
+                          fhlOverlayCuts, fhlRegionSize,
+                          scheme == 1 && fhlSubregionSize > 0 ? 1 : 0);
+            std::cout << "Built regions in "
+                      << regionTimer.elapsed<std::chrono::milliseconds>() << " ms. ";
+            regions.printStats(std::cout);
+        }
+
+        FHLData data(hierarchy.numHubs(), graph.numVertices());
+        HubAccessPreprocessor preprocessor;
+        // A plain customization frees the access-hub scaffolding at its end (it is only needed to
+        // customize), which makes it one-shot. The update benchmarks and -n > 1 customize again,
+        // so they keep it; for -n the scaffolding is released after the last run below, before
+        // any memory is reported, so the reported footprint is the same as a single run's.
+        const int customizationRuns = std::max(1, clp.getValue<int>("n", 1));
+        const bool keepAccessHubs = fhlBenchUpdates > 0 || customizationRuns > 1;
+        FHLMetric<CCH> metric(hierarchy, cch, preprocessor.getAccessHubEdges(),
+                                                useLengths ? &graph.length(0) : &graph.travelTime(0),
+                                                static_cast<fhl::Level>(pruneThreshold), scheme,
+                                                &regions,
+                                                fhlTopLabels, keepAccessHubs,
+                                                fhlSubtreeRebuild && scheme == 1);
+
+        preprocessor.preprocess(hierarchy, cch, data.getBaseData());
+        times.schemeMs = msSince(phase);
+        std::cout << "Finished preprocessing" << std::endl;
+        Timer customizationTimer;
+        metric.customize(data);
+        const auto customizationTime = customizationTimer.elapsed<std::chrono::microseconds>();
+        recordCustomization(clp, times, customizationTime / 1000.0, [&] { metric.customize(data); });
+        if (customizationRuns > 1 && fhlBenchUpdates <= 0)
+            FHLMetric<CCH>::releaseAccessHubs(data.getBaseData());
+        std::cout << "Finished FHL customization in " << customizationTime
+                  << " microseconds." << std::endl;
+        const auto avgNonInfty = data.getBaseData().computeAverageNumberOfNonInftyAccessHubs();
+        std::cout << "Average non-infty access nodes per vertex: forward " << avgNonInfty.first
+                  << ", backward " << avgNonInfty.second << std::endl;
+
+        if (overlayBenchUpdates > 0 && scheme == 2) {
+            // Partial re-customization benchmark. Weights are unchanged, so the rebuilt
+            // blocks must be identical; the query verification below runs on the
+            // recustomized data and doubles as the correctness check.
+            const int32_t numLeaf = regions.leaf().numRegions();
+            Timer rt;
+            for (int32_t i = 0; i < overlayBenchUpdates; ++i) {
+                const int32_t r = static_cast<int32_t>((static_cast<int64_t>(i) * 7919 + 13) %
+                                                       numLeaf);
+                fhl::Overlay::recustomizeLeafRegion(
+                        regions, hierarchy, cch, metric.getCCHMetric().upwardWeights(),
+                        metric.getCCHMetric().downwardWeights(),
+                        metric.getLocalEliminationTree(),
+                        useLengths ? &graph.length(0) : &graph.travelTime(0), r, data.ladder);
+            }
+            const auto rcTime = rt.elapsed<std::chrono::microseconds>();
+            std::cout << "Overlay partial re-customization: " << overlayBenchUpdates
+                      << " regions, " << rcTime / std::max(1, overlayBenchUpdates)
+                      << " us/region (full customization " << customizationTime << " us)."
+                      << std::endl;
+        }
+
+        if (fhlBenchUpdates > 0 && scheme == 1) {
+            // Incremental flat benchmark: perturb a few interior edges of a leaf region,
+            // partially customize, restore the weights, partially customize back. The final
+            // state equals the initial one, so the query verification below still applies.
+            const int32_t numLeaf = regions.leaf().numRegions();
+            auto *const weights = useLengths ? &graph.length(0) : &graph.travelTime(0);
+            // Interior input edges per leaf region, with their CCH up-edge ids.
+            // (input edge, reverse input edge, cch up-edge). Both directions are perturbed
+            // together: a one-directional change makes the metric asymmetric, which the
+            // symmetric structures cannot represent (the partial paths then escalate).
+            struct RegionEdge {
+                int32_t inEdge, revEdge, cchEdge;
+            };
+            std::vector<std::vector<RegionEdge>> regionEdges(numLeaf);
+            const auto &upGraph = cch.getUpwardGraph();
+            FORALL_VALID_EDGES(graph, u, e) {
+                const int32_t ru = cch.getRanks()[u];
+                const int32_t rv = cch.getRanks()[graph.edgeHead(e)];
+                const int32_t r1 = regions.leafRegionOfVertex[ru];
+                if (r1 < 0 || r1 != regions.leafRegionOfVertex[rv] || ru == rv)
+                    continue;
+                const int32_t t = std::min(ru, rv), h = std::max(ru, rv);
+                int32_t cchEdge = -1;
+                for (int ce = upGraph.firstEdge(t); ce < upGraph.lastEdge(t); ++ce)
+                    if (upGraph.edgeHead(ce) == h) {
+                        cchEdge = ce;
+                        break;
+                    }
+                if (cchEdge < 0)
+                    continue;
+                int32_t rev = -1;
+                const int32_t head = graph.edgeHead(e);
+                for (int re = graph.firstEdge(head); re < graph.lastEdge(head); ++re)
+                    if (graph.edgeHead(re) == u) {
+                        rev = re;
+                        break;
+                    }
+                regionEdges[r1].push_back({e, rev, cchEdge});
+            }
+            std::vector<int32_t> levelHist(32, 0);
+            // Hard verification of the PERTURBED state (the timing loop only checks the
+            // round trip): full-customize on perturbed weights = ground truth; compare the
+            // partial result against it array by array.
+            const int32_t verifyRounds = clp.getValue<int>("fhl-bench-updates-verify", 0);
+            for (int32_t i = 0; i < verifyRounds; ++i) {
+                const int32_t r = static_cast<int32_t>(
+                        (static_cast<int64_t>(i) * 104729 + 7) % numLeaf);
+                if (regionEdges[r].size() < 1)
+                    continue;
+                const auto re = regionEdges[r][regionEdges[r].size() / 2];
+                const int32_t ie = re.inEdge, ce = re.cchEdge;
+                const int32_t w0 = weights[ie];
+                const int32_t wr0 = re.revEdge >= 0 ? weights[re.revEdge] : 0;
+                weights[ie] = w0 + w0 / 20 + 1;
+                if (re.revEdge >= 0)
+                    weights[re.revEdge] = wr0 + wr0 / 20 + 1;
+                metric.customize(data); // ground truth on perturbed weights
+                std::vector<int32_t> gtSeed(data.ladder.seedFwd.data(),
+                                            data.ladder.seedFwd.data() +
+                                                    data.ladder.seedFwd.size());
+                auto gtPtr = data.ladder.csrOut.ptr;
+                auto gtEnd = data.ladder.csrOut.colEnd;
+                auto gtRow = data.ladder.csrOut.row;
+                auto gtVal = data.ladder.csrOut.val;
+                auto gtMin = data.ladder.colMinOut;
+                weights[ie] = w0;
+                if (re.revEdge >= 0)
+                    weights[re.revEdge] = wr0;
+                metric.customize(data); // back to base state
+                weights[ie] = w0 + w0 / 20 + 1;
+                if (re.revEdge >= 0)
+                    weights[re.revEdge] = wr0 + wr0 / 20 + 1;
+                const auto st = metric.partialCustomizeFlat(data, {ce}, r);
+                bool ok = true;
+                if (st.outcome ==
+                    FHLMetric<CCH>::PARTIAL_NEED_FULL) {
+                    metric.customize(data);
+                }
+                const bool okSeed =
+                        std::equal(gtSeed.begin(), gtSeed.end(), data.ladder.seedFwd.data());
+                // Column-wise comparison: the incremental gears may rewrite a region's
+                // segment in place or move it to the tail, so the arrays are equal only
+                // per column, not element by element.
+                const auto &csr = data.ladder.csrOut;
+                bool okCsr = gtPtr.size() == csr.ptr.size();
+                if (okCsr) {
+                    const int64_t nCols = static_cast<int64_t>(gtPtr.size()) - 1;
+                    for (int64_t j = 0; j < nCols && okCsr; ++j) {
+                        const int64_t gs = gtPtr[j];
+                        const int64_t ge = gtEnd.empty() ? gtPtr[j + 1] : gtEnd[j];
+                        const int64_t ps = csr.ptr[j];
+                        const int64_t pe = csr.endArray()[j];
+                        if (ge - gs != pe - ps) {
+                            okCsr = false;
+                            break;
+                        }
+                        for (int64_t k = 0; k < ge - gs; ++k)
+                            if (gtRow[gs + k] != csr.row[ps + k] ||
+                                gtVal[gs + k] != csr.val[ps + k]) {
+                                okCsr = false;
+                                break;
+                            }
+                    }
+                }
+                const bool okMin = gtMin == data.ladder.colMinOut;
+                ok = okSeed && okCsr && okMin;
+                std::cout << "[verify] round " << i << " outcome " << st.outcome
+                          << " changed=" << st.changed << " minLvl=" << st.minChangedLevel
+                          << " seed:" << (okSeed ? "ok" : "BAD")
+                          << " csr:" << (okCsr ? "ok" : "BAD")
+                          << " colMin:" << (okMin ? "ok" : "BAD")
+                          << (ok ? " MATCH" : " *** MISMATCH ***") << std::endl;
+                weights[ie] = w0;
+                if (re.revEdge >= 0)
+                    weights[re.revEdge] = wr0;
+                metric.customize(data); // restore base for the next round / final checks
+            }
+            int64_t fastUs = 0, fullUs = 0, superUs = 0;
+            int32_t nNoop = 0, nFast = 0, nSuper = 0, nFull = 0;
+            int64_t recomputed = 0, changedEdges = 0;
+            int32_t rounds = 0;
+            const auto applyUpdate = [&](const std::vector<int32_t> &cchEdges,
+                                         const int32_t r) {
+                Timer t;
+                const auto st = metric.partialCustomizeFlat(data, cchEdges, r);
+                ++levelHist[std::min(31, static_cast<int>(st.minChangedLevel))];
+                recomputed += st.recomputed;
+                changedEdges += st.changed;
+                if (st.outcome == FHLMetric<CCH>::PARTIAL_NEED_FULL) {
+                    metric.customize(data); // access structures were kept alive
+                    fullUs += t.elapsed<std::chrono::microseconds>();
+                    ++nFull;
+                } else if (st.outcome == FHLMetric<CCH>::PARTIAL_SUPER) {
+                    superUs += t.elapsed<std::chrono::microseconds>();
+                    ++nSuper;
+                } else {
+                    fastUs += t.elapsed<std::chrono::microseconds>();
+                    st.outcome == FHLMetric<CCH>::PARTIAL_FAST ? ++nFast
+                                                                                 : ++nNoop;
+                }
+            };
+            for (int32_t i = 0; rounds < fhlBenchUpdates && i < 4 * fhlBenchUpdates; ++i) {
+                const int32_t r = static_cast<int32_t>(
+                        (static_cast<int64_t>(i) * 7919 + 13) % numLeaf);
+                if (regionEdges[r].size() < 4)
+                    continue;
+                ++rounds;
+                std::vector<int32_t> cchEdges;
+                std::vector<std::pair<int32_t, int32_t>> saved; // (input edge, old weight)
+                const size_t stride = std::max<size_t>(1, regionEdges[r].size() / 4);
+                for (size_t k = 0; k < regionEdges[r].size() && cchEdges.size() < 1;
+                     k += stride) {
+                    const auto re2 = regionEdges[r][k];
+                    saved.emplace_back(re2.inEdge, weights[re2.inEdge]);
+                    weights[re2.inEdge] += weights[re2.inEdge] / 20 + 1; // ~x1.05 increase
+                    if (re2.revEdge >= 0) {
+                        saved.emplace_back(re2.revEdge, weights[re2.revEdge]);
+                        weights[re2.revEdge] += weights[re2.revEdge] / 20 + 1;
+                    }
+                    cchEdges.push_back(re2.cchEdge);
+                }
+                applyUpdate(cchEdges, r); // perturbed
+                for (const auto &[ie, w] : saved)
+                    weights[ie] = w;
+                applyUpdate(cchEdges, r); // restored — final state == initial state
+            }
+            std::cout << "Escalation level histogram (min changed level per update):";
+            for (int l = 0; l < 32; ++l)
+                if (levelHist[l] > 0)
+                    std::cout << ' ' << l << ':' << levelHist[l];
+            std::cout << std::endl;
+            const int32_t nPartial = nNoop + nFast;
+            std::cout << "Incremental flat: " << 2 * rounds << " updates -> " << nNoop
+                      << " no-op, " << nFast << " fast, " << nSuper << " super ("
+                      << (nSuper > 0 ? superUs / nSuper : 0) << " us avg), " << nFull
+                      << " full; avg partial "
+                      << (nPartial > 0 ? fastUs / nPartial : 0) << " us"
+                      << (nFull > 0 ? " (avg full " + std::to_string(fullUs / nFull) + " us)"
+                                    : std::string())
+                      << "; avg " << (2 * rounds > 0 ? recomputed / (2 * rounds) : 0)
+                      << " edges rechecked / " << (2 * rounds > 0 ? changedEdges / (2 * rounds) : 0)
+                      << " changed per update (full customization " << customizationTime
+                      << " us)." << std::endl;
+        }
+
+        outputFile << "# Graph: " << graphFileName << '\n';
+        outputFile << "# OD pairs: " << demandFileName << '\n';
+        writePhaseTimes(outputFile, times);
+
+        FHLQuery algo(hierarchy, data, metric.getLocalEliminationTree(),
+                                   cch.getUpwardGraph(), metric.getCCHMetric().upwardWeights(),
+                                   metric.getCCHMetric().downwardWeights(),
+                                   &regions);
+
+        outputFile << "# Memory usage CCH: " << (cch.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage hierarchy: " << (hierarchy.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage access nodes: " << (data.getBaseData().sizeAccessHubsInBytes()) / BYTES_PER_MB
+                   << " MB" << '\n';
+        outputFile << "# Memory usage hierarchical tables: " << (data.sizeTablesInBytes()) / BYTES_PER_MB << " MB"
+                   << '\n';
+        outputFile << "# Memory usage region data: " << (data.ladder.sizeInBytes()) / BYTES_PER_MB
+                   << " MB" << '\n';
+        outputFile << "# Memory usage regions: "
+                   << regions.sizeInBytes() / BYTES_PER_MB
+                   << " MB" << '\n';
+        outputFile << "# Memory usage preprocessor: " << (preprocessor.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        outputFile << "# Memory usage query: " << (algo.sizeInBytes()) / BYTES_PER_MB << " MB" << '\n';
+        // The Regions object is live query data (leafRegionOfVertex, flatLevelEnd, the
+        // boundary-point lists), so it belongs in the total; it used to be reported on its
+        // own line only.
+        outputFile << "# Memory usage total: " <<
+                   (cch.sizeInBytes() + hierarchy.sizeInBytes() + data.sizeInBytes() +
+                    preprocessor.sizeInBytes() + metric.sizeInBytes() + algo.sizeInBytes() +
+                    regions.sizeInBytes()) / BYTES_PER_MB << " MB"
+                   << '\n';
         runQueries(algo, demandFileName, outputFile, [&](const int v) { return cch.getRanks()[v]; });
 
     } else {
@@ -668,7 +1204,7 @@ inline void runPreprocessing(const CommandLineParser &clp) {
         outputFile << "# Separator: " << sepFileName << '\n';
 
 
-        const int levelThreshold = clp.getValue<int>("ctnr-thresh", 5);
+        const int levelThreshold = transitLevels(clp, decomp);
         int pruneThreshold = clp.getValue<int>("ctnr-prune-thresh", 0);
 
         Timer timer;
@@ -940,8 +1476,12 @@ inline void runPreprocessing(const CommandLineParser &clp) {
 }
 
 int main(int argc, char *argv[]) {
-    std::cout << "Using " << NUM_THREADS << " threads for parallel regions in RunP2PAlgo." << std::endl;
-    omp_set_num_threads(NUM_THREADS);
+    // Compile-time default, overridable at runtime for scaling measurements.
+    int numThreads = NUM_THREADS;
+    if (const char *const env = std::getenv("CTNR_THREADS"))
+        numThreads = std::max(1, std::atoi(env));
+    std::cout << "Using " << numThreads << " threads for parallel regions in RunP2PAlgo." << std::endl;
+    omp_set_num_threads(numThreads);
     try {
         CommandLineParser clp(argc, argv);
         if (clp.isSet("help"))
